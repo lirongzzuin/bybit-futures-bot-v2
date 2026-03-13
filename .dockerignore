@@ -1,0 +1,12 @@
+__pycache__
+*.pyc
+.env
+.git
+logs/
+reports/
+data/cache/
+data/trades.db
+*.csv
+*.html
+.venv
+venv
