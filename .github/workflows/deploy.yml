@@ -4,9 +4,6 @@ on:
   push:
     branches: [main]
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   deploy:
     name: Deploy
@@ -14,8 +11,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Install flyctl
+        run: curl -L https://fly.io/install.sh | sh
 
-      - run: flyctl deploy --strategy rolling --remote-only
+      - name: Deploy to fly.io
+        run: ~/.fly/bin/flyctl deploy --strategy rolling --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
