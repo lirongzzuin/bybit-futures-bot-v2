@@ -162,6 +162,8 @@ class BybitClient:
                     "unrealized_pnl": float(p.get("unrealisedPnl") or 0),
                     "leverage": p.get("leverage") or "1",
                     "liq_price": float(p.get("liqPrice") or 0),
+                    "take_profit": float(p.get("takeProfit") or 0),
+                    "stop_loss": float(p.get("stopLoss") or 0),
                 })
         return positions
 

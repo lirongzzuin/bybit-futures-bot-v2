@@ -201,7 +201,8 @@
 | **Strategy** | pandas, numpy, ta (Technical Analysis) |
 | **Database** | SQLite (거래 기록, 일일 요약) |
 | **Infra** | fly.io (Docker, Persistent Volume) |
-| **Monitoring** | Slack Webhook (실시간 알림) |
+| **Monitoring** | Slack Webhook (실시간 알림), 1분 주기 포지션 모니터링 |
+| **CI/CD** | GitHub Actions → fly.io 자동 배포 |
 | **Scheduling** | schedule (4h candle + 1min monitor) |
 | **Web** | Flask (Health Check Endpoint) |
 
@@ -249,7 +250,33 @@ BYBIT_TESTNET=false
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 ```
 
-### fly.io 배포
+### CI/CD (GitHub Actions → fly.io 자동 배포)
+
+`main` 브랜치에 push하면 GitHub Actions가 자동으로 fly.io에 배포합니다.
+
+```yaml
+# .github/workflows/deploy.yml
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --strategy rolling --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+```
+
+**설정 방법:**
+1. `flyctl tokens create deploy` 로 배포 토큰 생성
+2. GitHub 레포지토리 → Settings → Secrets → `FLY_API_TOKEN` 추가
+3. 이후 `git push` 시 자동 배포
+
+### fly.io 수동 배포
 
 ```bash
 # 최초 배포
@@ -277,11 +304,17 @@ python main.py
 
 | 채널 | 내용 | 주기 |
 |------|------|------|
+| **로그** | 포지션별 수익률, SL, TP 현황 | **1분** |
 | **Slack** | 포지션 진입/청산 알림, PnL | 실시간 |
 | **Slack** | 포트폴리오 브리핑 | 6시간 (KST 09/15/21/03시) |
 | **HTTP** | `/health` — 봇 상태 | 30초 (fly.io) |
 | **HTTP** | `/status` — 잔고, 포지션, 심볼 | 요청 시 |
 | **SQLite** | 전체 거래 기록 | 매 거래 |
+
+1분 모니터링 로그 예시:
+```
+[모니터] 3개 포지션 | FUSDT L pnl=+0.02% SL=0.005372 TP=0.006048 | GALAUSDT L pnl=+0.39% SL=0.003369 TP=0.003771 | XPLUSDT L pnl=+0.99% SL=0.10386 TP=0.11929
+```
 
 ---
 
@@ -303,7 +336,11 @@ python main.py
 **문제**: 4시간봉 시그널은 진입 시점에만 발생하고 다음 봉에서는 자연히 0이 되는데, 이를 "시그널 소멸"로 오판하여 진입 직후 전량 청산
 **해결**: `direction=0`을 청산 사유에서 제거. 반대 방향 시그널이 명시적으로 발생할 때만 청산
 
-### 5. API Rate Limit 낭비
+### 5. 재시작 시 TP/SL 동기화 누락
+**문제**: 봇 재배포 시 Bybit에서 포지션을 동기화하지만, 서버사이드에 설정된 TP/SL 값을 가져오지 않아 내부 추적 값이 0으로 초기화됨. 부분 익절/TP 확대 등 내부 로직이 작동하지 않는 문제
+**해결**: `get_positions()` API 응답에서 `takeProfit`/`stopLoss` 필드를 함께 파싱하여 내부 상태에 반영
+
+### 6. API Rate Limit 낭비
 **문제**: 트레일링 SL이 동일한 값을 매분 반복 설정하여 "not modified" (34040) 에러 + 3회 재시도로 API 호출 낭비
 **해결**: SL 변경 전 현재값 비교 + "not modified" 에러를 정상 응답으로 처리 (재시도 방지)
 

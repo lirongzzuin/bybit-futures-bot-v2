@@ -108,8 +108,8 @@ class TradingBot:
                     "entry_price": p["entry_price"],
                     "quantity": p["size"],
                     "original_qty": p["size"],
-                    "tp": 0,  # 서버사이드 TP/SL은 Bybit에서 관리
-                    "sl": 0,
+                    "tp": p.get("take_profit", 0),
+                    "sl": p.get("stop_loss", 0),
                     "status": "active",
                     "partial_tp_done": False,
                     "highest_price": p["entry_price"],
@@ -495,8 +495,8 @@ class TradingBot:
                         "entry_price": p["entry_price"],
                         "quantity": p["size"],
                         "original_qty": p["size"],
-                        "tp": 0,
-                        "sl": 0,
+                        "tp": p.get("take_profit", 0),
+                        "sl": p.get("stop_loss", 0),
                         "status": "active",
                         "partial_tp_done": False,
                         "highest_price": p["entry_price"],
@@ -561,11 +561,52 @@ class TradingBot:
             self._check_position_closures()
 
             # 보유 포지션 실시간 관리 (트레일링 SL, 부분 익절, TP 확대)
-            for symbol in list(self.risk.state.open_positions.keys()):
-                try:
-                    self._manage_existing_position(symbol)
-                except Exception as e:
-                    logger.error(f"[{symbol}] 실시간 관리 에러: {e}")
+            active_positions = {
+                s: p for s, p in self.risk.state.open_positions.items()
+                if p.get("status") != "pending"
+            }
+
+            if active_positions:
+                summaries = []
+                for symbol, pos_info in active_positions.items():
+                    try:
+                        ticker = self.client.get_ticker(symbol)
+                        price = ticker["last_price"]
+                        entry = pos_info["entry_price"]
+                        side = pos_info["side"]
+                        sl = pos_info.get("sl", 0)
+                        tp = pos_info.get("tp", 0)
+
+                        if side == "long":
+                            pnl_pct = (price - entry) / entry * 100
+                        else:
+                            pnl_pct = (entry - price) / entry * 100
+
+                        summaries.append(
+                            f"{symbol} {side[0].upper()} "
+                            f"pnl={pnl_pct:+.2f}% "
+                            f"SL={sl} TP={tp}"
+                        )
+
+                        # 포지션 관리 실행
+                        self._manage_existing_position(symbol)
+
+                    except Exception as e:
+                        logger.error(f"[{symbol}] 실시간 관리 에러: {e}")
+
+                logger.info(f"[모니터] {len(active_positions)}개 포지션 | " +
+                            " | ".join(summaries))
+            else:
+                # 포지션 없을 때는 5분마다만 로그
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+                if now.minute % 5 == 0:
+                    pending = sum(1 for p in self.risk.state.open_positions.values()
+                                  if p.get("status") == "pending")
+                    msg = f"[모니터] 활성 포지션 없음"
+                    if pending:
+                        msg += f" (pending: {pending}개)"
+                    logger.info(msg)
 
         except Exception as e:
             logger.error(f"모니터링 에러: {e}", exc_info=True)
