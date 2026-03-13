@@ -275,8 +275,8 @@ class TradingBot:
                 # 최고가 기준으로 트레일링 (이익의 60% 보호)
                 cur_highest = pos_info.get("highest_price", price)
                 trail_sl = cur_highest - (cur_highest - entry) * 0.4
-                if trail_sl > sl and trail_sl > entry:
-                    trail_sl = self.client.round_price(symbol, trail_sl)
+                trail_sl = self.client.round_price(symbol, trail_sl)
+                if trail_sl > sl and trail_sl > entry and trail_sl != sl:
                     try:
                         self.client.set_tp_sl(symbol, stop_loss=trail_sl, position_idx=1)
                         pos_info["sl"] = trail_sl
@@ -290,8 +290,8 @@ class TradingBot:
                     pos_info["lowest_price"] = price
                 cur_lowest = pos_info.get("lowest_price", price)
                 trail_sl = cur_lowest + (entry - cur_lowest) * 0.4
-                if trail_sl < entry and (trail_sl < sl or sl == 0 or sl >= entry):
-                    trail_sl = self.client.round_price(symbol, trail_sl)
+                trail_sl = self.client.round_price(symbol, trail_sl)
+                if trail_sl < entry and trail_sl != sl and (trail_sl < sl or sl == 0 or sl >= entry):
                     try:
                         self.client.set_tp_sl(symbol, stop_loss=trail_sl, position_idx=2)
                         pos_info["sl"] = trail_sl

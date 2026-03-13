@@ -64,7 +64,7 @@ FEES = {
 
 # === 주문 타입 결정 기준 ===
 ORDER_TYPE_CONFIG = {
-    "strong_signal_threshold": 0.7,   # 강도 >= 0.7 → 시장가(즉시 진입)
+    "strong_signal_threshold": 0.5,   # 강도 >= 0.5 → 시장가(즉시 진입)
     "limit_offset_atr_mult": 0.1,     # 지정가 오프셋: ATR * 0.1 (유리한 가격에 진입)
     "limit_timeout_seconds": 300,     # 지정가 미체결 시 취소까지 대기 (5분)
 }

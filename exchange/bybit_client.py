@@ -244,12 +244,12 @@ class BybitClient:
         logger.info(f"[{symbol}] 지정가 {side} {qty} @ {price} (ID: {order_id})")
         return {"order_id": order_id, "symbol": symbol, "side": side, "qty": qty, "price": price}
 
-    @retry_on_error
     def set_tp_sl(self, symbol: str, take_profit: float = None,
                   stop_loss: float = None, position_idx: int = 1) -> dict:
         """
         서버사이드 TP/SL 설정
         position_idx: 1=Long, 2=Short (Hedge Mode)
+        "not modified" (34040)은 이미 같은 값 → 정상 처리
         """
         params = {
             "category": "linear",
@@ -263,7 +263,12 @@ class BybitClient:
 
         result = self.session.set_trading_stop(**params)
         if result["retCode"] != 0:
-            raise Exception(f"TP/SL 설정 실패: {result['retMsg']}")
+            msg = result.get("retMsg", "")
+            # "not modified" = 이미 같은 값 설정됨 → 에러 아님
+            if "not modified" in msg.lower() or "34040" in str(result["retCode"]):
+                logger.debug(f"[{symbol}] TP/SL 이미 동일 — 스킵")
+                return result.get("result", {})
+            raise Exception(f"TP/SL 설정 실패: {msg}")
 
         logger.info(f"[{symbol}] TP: {take_profit}, SL: {stop_loss}")
         return result["result"]
