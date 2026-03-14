@@ -192,9 +192,10 @@ class BacktestEngine:
                         exit_price *= (1 + cfg.slippage_rate)
                         raw_pnl = (position.entry_price - exit_price) * position.quantity
 
+                    # Leverage amplifies PnL (both gains and losses)
                     raw_pnl *= position.leverage
 
-                    # Fees
+                    # Fees (on notional value)
                     entry_fee = position.entry_price * position.quantity * cfg.fee_rate
                     exit_fee = exit_price * position.quantity * cfg.fee_rate
                     total_fee = entry_fee + exit_fee

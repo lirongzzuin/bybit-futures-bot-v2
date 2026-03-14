@@ -109,6 +109,7 @@ class RiskManager:
             return 0.0
 
         # 포지션 사이즈 = 리스크 금액 / (가격 차이 / 진입가)
+        # 레버리지는 엔진에서 PnL에 별도 적용됨
         position_value = risk_amount / (price_diff / entry_price)
         quantity = position_value / entry_price
 

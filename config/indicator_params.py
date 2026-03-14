@@ -42,15 +42,15 @@ VOLUME = {
     "ma_length": 20,
 }
 
-# === Trading Config (v3.0 — conservative) ===
+# === Trading Config (v3.1 — higher leverage, compound growth) ===
 TRADING = {
     "exchange": "bybit",
-    "default_leverage": 3,
-    "max_leverage": 7,
+    "default_leverage": 10,
+    "max_leverage": 30,
     "default_timeframe": "4h",
-    "risk_per_trade": 0.015,      # 1.5% per trade
-    "max_open_positions": 3,      # max 3 concurrent positions
-    "max_daily_loss": 0.04,       # 4% daily max loss
+    "risk_per_trade": 0.005,      # 0.5% × leverage = ~5% actual risk
+    "max_open_positions": 3,
+    "max_daily_loss": 0.05,       # 5% daily max loss
 }
 
 # === Fee Config (Bybit USDT perpetual) ===
