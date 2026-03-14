@@ -42,15 +42,15 @@ VOLUME = {
     "ma_length": 20,
 }
 
-# === Trading Config (v3.1 — higher leverage, compound growth) ===
+# === Trading Config (v4.0 — 15min scalping with 4H cross-validation) ===
 TRADING = {
     "exchange": "bybit",
-    "default_leverage": 10,
-    "max_leverage": 30,
-    "default_timeframe": "4h",
-    "risk_per_trade": 0.005,      # 0.5% × leverage = ~5% actual risk
-    "max_open_positions": 3,
-    "max_daily_loss": 0.05,       # 5% daily max loss
+    "default_leverage": 15,
+    "max_leverage": 25,
+    "default_timeframe": "15",    # 15-minute candles (4H via resampling)
+    "risk_per_trade": 0.001,      # 0.1% x 10x avg = ~1% actual risk
+    "max_open_positions": 5,      # More positions for scalping
+    "max_daily_loss": 0.08,       # 8% daily max loss
 }
 
 # === Fee Config (Bybit USDT perpetual) ===
@@ -61,7 +61,7 @@ FEES = {
 
 # === Order Type Config ===
 ORDER_TYPE_CONFIG = {
-    "strong_signal_threshold": 0.5,   # strength >= 0.5 -> market order
+    "strong_signal_threshold": 0.9,   # Almost always limit orders (lower fees)
     "limit_offset_atr_mult": 0.1,
     "limit_timeout_seconds": 300,
 }

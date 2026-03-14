@@ -1,9 +1,10 @@
 """
-Backtest Engine v3.0
+Backtest Engine v4.0
 - Event-driven simulator with trailing stop support
 - Dynamic leverage from signals
 - Accurate fee + slippage modeling
 - Compound growth (risk % of current capital)
+- Supports 15-minute scalping (configurable time_exit_bars, annualization)
 """
 import numpy as np
 import pandas as pd
@@ -23,12 +24,13 @@ class BacktestConfig:
     initial_capital: float = 10000.0
     fee_rate: float = 0.0006       # 0.06% total (maker+taker avg)
     slippage_rate: float = 0.0005  # 0.05%
-    leverage: int = 3              # Default, overridden by signal
-    tp_sl_ratio: float = 3.0      # R:R ratio
-    atr_trailing_mult: float = 2.5
+    leverage: int = 15             # Default, overridden by signal
+    tp_sl_ratio: float = 1.5      # R:R ratio
+    atr_trailing_mult: float = 0.5  # Tight trailing for scalping
     exit_type: str = "fixed_tp_sl"  # No trailing by default
-    max_bars: int = 40             # Time-based exit
+    max_bars: int = 48             # Time-based exit (48 x 15min = 12 hours)
     use_signal_leverage: bool = True  # Use leverage from signal
+    bars_per_day: int = 96         # 96 bars/day for 15min (used for Sharpe annualization)
 
 
 @dataclass
@@ -356,11 +358,12 @@ class BacktestEngine:
         drawdown = (eq - peak) / np.where(peak > 0, peak, 1) * 100
         result.max_drawdown_pct = abs(drawdown.min())
 
-        # Sharpe ratio (annualized, 4h bars = 6/day * 365)
+        # Sharpe ratio (annualized using configurable bars_per_day)
         if len(pnls) > 1:
             returns = pd.Series(pnls) / cfg.initial_capital
+            bars_per_day = getattr(cfg, "bars_per_day", 96)  # default 96 for 15min
             if returns.std() > 0:
-                result.sharpe_ratio = returns.mean() / returns.std() * np.sqrt(6 * 365)
+                result.sharpe_ratio = returns.mean() / returns.std() * np.sqrt(bars_per_day * 365)
             else:
                 result.sharpe_ratio = 0
         else:

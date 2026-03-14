@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-암호화폐 선물 자동매매 봇 — v3.0
+암호화폐 선물 자동매매 봇 — v4.0
 
-전략: ATM (Adaptive Trend-Momentum) — 시장 레짐 적응형
+전략: Multi-TF Scalp (15분봉 스캘핑 + 4H 크로스 검증)
 거래소: Bybit USDT 무기한 선물
-타임프레임: 4시간봉
+타임프레임: 15분봉 (4H 리샘플링으로 상위 추세 확인)
 
-v3.0 변경사항:
-  - 전략 전면 재설계: EMA(9/21/50/200) + ADX/DMI + RSI + MACD + BB
-  - 매크로 트렌드 필터 (EMA200): 추세 방향으로만 거래
-  - 동적 SL/TP: ATR 변동성 기반 자동 조정
-  - 보수적 레버리지 (2~7x, 기존 최대 30x)
-  - 리스크 1.5%/거래, 최대 3 동시 포지션
-  - 3개 기간 백테스트 검증 (최근/약세장/코로나)
+v4.0 변경사항:
+  - 전략 전면 재설계: 15분 스캘핑 + 4H 트렌드 교차검증
+  - 타임프레임: 4H → 15분 (4H는 내부 리샘플링)
+  - 스케줄: 15분마다 캔들 분석 (매시 :01, :16, :31, :46)
+  - 레버리지: 10~25x (신호 확실도 기반)
+  - TP/SL: 1.5x/1.0x ATR (타이트 스캘핑)
+  - 모니터링: 거래량 상위 30개 심볼
+  - 리스크: 0.3%/거래, 최대 5 동시 포지션, 일일 8% 한도
 
 실행: python main.py
 """
@@ -35,7 +36,6 @@ from strategy.final_strategy import (
     generate_signals, get_current_signal, calc_atr,
     OPTIMAL_PARAMS, ENGINE_CONFIG,
 )
-# compute_indicators no longer needed — ATM strategy computes its own indicators
 from exchange.bybit_client import BybitClient
 from exchange.order_manager import OrderManager
 from strategy.risk_manager import RiskManager
@@ -51,14 +51,15 @@ class TradingBot:
     """메인 트레이딩 봇"""
 
     def __init__(self):
-        mode = "테스트넷" if BYBIT_TESTNET else "⚠️ 메인넷"
+        mode = "테스트넷" if BYBIT_TESTNET else "메인넷"
         logger.info("=" * 60)
-        logger.info(f"암호화폐 선물 자동매매 봇 v3.0")
+        logger.info(f"암호화폐 선물 자동매매 봇 v4.0")
         logger.info(f"  모드: {mode}")
-        logger.info(f"  전략: ATM (Adaptive Trend-Momentum)")
+        logger.info(f"  전략: Multi-TF Scalp (15min + 4H cross-validation)")
+        logger.info(f"  타임프레임: 15분봉 (4H 리샘플링)")
         logger.info(f"  레버리지: {OPTIMAL_PARAMS['base_leverage']}x ~ {OPTIMAL_PARAMS['max_leverage']}x (동적)")
         logger.info(f"  리스크: 거래당 {ENGINE_CONFIG['risk_per_trade']*100}%")
-        logger.info(f"  SL: ATR {OPTIMAL_PARAMS['sl_atr_mult']}x / TP: ATR {OPTIMAL_PARAMS['tp_atr_mult_trend']}x")
+        logger.info(f"  SL: ATR {OPTIMAL_PARAMS['sl_atr_mult']}x / TP: ATR {OPTIMAL_PARAMS['tp_atr_mult']}x")
         logger.info(f"  시장가 기준: 강도 >= {ORDER_TYPE_CONFIG['strong_signal_threshold']}")
         logger.info(f"  매크로 필터: EMA{OPTIMAL_PARAMS['ema_macro']}")
         logger.info("=" * 60)
@@ -72,7 +73,7 @@ class TradingBot:
         self.risk = RiskManager(initial_balance=balance["total"])
         self.order_mgr = OrderManager(self.client, self.risk)
 
-        # 전략 대상 심볼 (거래량 상위 100개, 주기적 갱신)
+        # 전략 대상 심볼 (거래량 상위 30개, 주기적 갱신)
         self.strategy_symbols = self._load_strategy_symbols()
 
         self.safe_mode = False
@@ -86,9 +87,9 @@ class TradingBot:
         signal.signal(signal.SIGINT, self._handle_shutdown)
 
     def _load_strategy_symbols(self) -> list[str]:
-        """거래량 상위 20개 USDT 무기한 선물 심볼 로드"""
+        """거래량 상위 30개 USDT 무기한 선물 심볼 로드"""
         try:
-            symbols = self.client.get_top_symbols_by_volume(limit=20)
+            symbols = self.client.get_top_symbols_by_volume(limit=30)
             logger.info(f"  전략 대상: 거래량 상위 {len(symbols)}개 심볼")
             return symbols
         except Exception as e:
@@ -149,13 +150,13 @@ class TradingBot:
             f"종료 시그널: {sig_name}\n"
             f"시각: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
             f"보유 포지션: {len(pos_list)}개 {pos_list}\n"
-            f"⚠️ 서버사이드 TP/SL은 유지됩니다"
+            f"서버사이드 TP/SL은 유지됩니다"
         ), level="error")
 
-    def fetch_data(self, symbol: str, limit: int = 200) -> pd.DataFrame:
-        """최신 OHLCV 데이터 수집"""
+    def fetch_data(self, symbol: str, limit: int = 500) -> pd.DataFrame:
+        """최신 15분 OHLCV 데이터 수집 (4H 리샘플링을 위해 충분한 양 필요)"""
         try:
-            klines = self.client.get_klines(symbol, interval="240", limit=limit)
+            klines = self.client.get_klines(symbol, interval="15", limit=limit)
             if not klines:
                 return pd.DataFrame()
 
@@ -176,11 +177,9 @@ class TradingBot:
     def _manage_existing_position(self, symbol: str, signal_data: dict = None):
         """
         기존 포지션 실시간 동적 관리 (1분마다 호출)
-        - 반대 시그널 → 즉시 전량 청산
-        - 시그널 소멸 → 청산
+        - 반대 시그널 -> 즉시 전량 청산
         - 트레일링 SL: 수익 방향으로 SL 끌어올림
         - 부분 익절: TP 50% 도달 시 절반 청산 + SL 본전 이동
-        - 약한 시그널 + 손실 → 조기 손절
         """
         pos_info = self.risk.state.open_positions.get(symbol)
         if not pos_info or pos_info.get("status") == "pending":
@@ -216,25 +215,22 @@ class TradingBot:
         else:
             tp_progress = 0
 
-        # === 시그널 기반 관리 (4시간봉 캔들 마감 시에만 전달됨) ===
+        # === 시그널 기반 관리 (15분봉 캔들 마감 시에만 전달됨) ===
         if signal_data:
             direction = signal_data["direction"]
             strength = signal_data["strength"]
             atr = signal_data["atr"]
 
-            # A) 반대 시그널 → 즉시 전량 청산
+            # A) 반대 시그널 -> 즉시 전량 청산
             if direction != 0:
                 is_reverse = (direction == 1 and side == "short") or \
                              (direction == -1 and side == "long")
                 if is_reverse:
-                    logger.info(f"[{symbol}] 반대 시그널 (강도 {strength:.2f}) → 즉시 청산")
+                    logger.info(f"[{symbol}] 반대 시그널 (강도 {strength:.2f}) -> 즉시 청산")
                     self.order_mgr.execute_exit(symbol, reason="reverse_signal")
                     return
 
-            # B) direction==0은 "진입 시그널 없음"일 뿐, 기존 포지션 청산 사유 아님
-            #    (시그널은 진입 시점에만 발생하고 다음 봉에서는 자연히 0이 됨)
-
-            # C) 같은 방향 시그널 발생 → 동적 SL 조정
+            # B) 같은 방향 시그널 발생 -> 동적 SL 조정
             if direction != 0 and not (
                 (direction == 1 and side == "short") or
                 (direction == -1 and side == "long")
@@ -246,7 +242,6 @@ class TradingBot:
 
         # 0) 안전장치: SL이 없는 포지션에 기본 SL 설정 (급락 대비)
         if sl == 0 or (side == "long" and sl <= 0) or (side == "short" and sl <= 0):
-            # ATR 2.5배 기본 SL 설정
             default_sl_pct = 0.05  # 진입가 대비 5%
             if side == "long":
                 emergency_sl = self.client.round_price(symbol, entry * (1 - default_sl_pct))
@@ -258,24 +253,22 @@ class TradingBot:
                 self.client.set_tp_sl(symbol, stop_loss=emergency_sl, position_idx=pos_idx)
                 pos_info["sl"] = emergency_sl
                 sl = emergency_sl
-                logger.info(f"[{symbol}] SL 없음 → 기본 SL 설정: {emergency_sl} (진입가 대비 {default_sl_pct:.0%})")
+                logger.info(f"[{symbol}] SL 없음 -> 기본 SL 설정: {emergency_sl} (진입가 대비 {default_sl_pct:.0%})")
             except Exception as e:
                 logger.warning(f"[{symbol}] 기본 SL 설정 실패: {e}")
 
         # 0-1) 급락/급등 강제 청산: 손실 > 8%이면 SL 대기하지 않고 즉시 시장가 청산
         if unrealized_pct <= -0.08:
-            logger.warning(f"[{symbol}] 급락 감지! 손실 {unrealized_pct:.1%} → 긴급 청산")
+            logger.warning(f"[{symbol}] 급락 감지! 손실 {unrealized_pct:.1%} -> 긴급 청산")
             self.order_mgr.execute_exit(symbol, reason=f"emergency_loss_{unrealized_pct:.1%}")
             return
 
         # 1) 트레일링 SL: 수익이 충분할 때만 활성화 (수익 > 3%)
-        #    수익 방향으로 SL을 끌어올려서 이익 보호
         if unrealized_pct >= 0.03:
             if side == "long":
                 highest = pos_info.get("highest_price", entry)
                 if price > highest:
                     pos_info["highest_price"] = price
-                # 최고가 기준으로 트레일링 (이익의 60% 보호)
                 cur_highest = pos_info.get("highest_price", price)
                 trail_sl = cur_highest - (cur_highest - entry) * 0.4
                 trail_sl = self.client.round_price(symbol, trail_sl)
@@ -283,7 +276,7 @@ class TradingBot:
                     try:
                         self.client.set_tp_sl(symbol, stop_loss=trail_sl, position_idx=1)
                         pos_info["sl"] = trail_sl
-                        logger.info(f"[{symbol}] 트레일링 SL 갱신: {sl} → {trail_sl} "
+                        logger.info(f"[{symbol}] 트레일링 SL 갱신: {sl} -> {trail_sl} "
                                     f"(수익 {unrealized_pct:.1%})")
                     except Exception as e:
                         logger.warning(f"[{symbol}] 트레일링 SL 실패: {e}")
@@ -298,20 +291,20 @@ class TradingBot:
                     try:
                         self.client.set_tp_sl(symbol, stop_loss=trail_sl, position_idx=2)
                         pos_info["sl"] = trail_sl
-                        logger.info(f"[{symbol}] 트레일링 SL 갱신: {sl} → {trail_sl} "
+                        logger.info(f"[{symbol}] 트레일링 SL 갱신: {sl} -> {trail_sl} "
                                     f"(수익 {unrealized_pct:.1%})")
                     except Exception as e:
                         logger.warning(f"[{symbol}] 트레일링 SL 실패: {e}")
 
         # 2) 부분 익절: TP 50% 이상 도달 + 아직 미실행
         if tp_progress >= 0.5 and not pos_info.get("partial_tp_done"):
-            logger.info(f"[{symbol}] TP 진행 {tp_progress:.0%} → 50% 부분 익절")
+            logger.info(f"[{symbol}] TP 진행 {tp_progress:.0%} -> 50% 부분 익절")
             self.order_mgr.execute_partial_close(
                 symbol, close_ratio=0.5,
                 reason=f"partial_tp (진행 {tp_progress:.0%}, 수익 {unrealized_pct:.2%})"
             )
 
-        # 3) TP 확대: TP 80% 도달 + 강한 모멘텀 → TP를 50% 더 확대
+        # 3) TP 확대: TP 80% 도달 + 강한 모멘텀 -> TP를 50% 더 확대
         if tp_progress >= 0.8 and tp > 0:
             tp_extension = pos_info.get("tp_extended", False)
             if not tp_extension:
@@ -325,19 +318,19 @@ class TradingBot:
                     self.client.set_tp_sl(symbol, take_profit=new_tp, position_idx=pos_idx)
                     pos_info["tp"] = new_tp
                     pos_info["tp_extended"] = True
-                    logger.info(f"[{symbol}] TP 확대: {tp:.2f} → {new_tp:.2f} (진행 {tp_progress:.0%})")
+                    logger.info(f"[{symbol}] TP 확대: {tp:.2f} -> {new_tp:.2f} (진행 {tp_progress:.0%})")
                 except Exception as e:
                     logger.warning(f"[{symbol}] TP 확대 실패: {e}")
 
     def process_symbol(self, symbol: str):
         """심볼별 시그널 처리"""
         try:
-            # 1. 데이터 수집 (ATM 전략은 자체 지표 계산)
+            # 1. 데이터 수집 (15분봉 500개 — 4H 리샘플링에 충분)
             df = self.fetch_data(symbol)
             if df.empty or len(df) < 100:
                 return
 
-            # 2. 시그널 생성 (ATM v3.0)
+            # 2. 시그널 생성 (Multi-TF Scalp v4.0)
             signal_data = get_current_signal(df)
 
             direction = signal_data["direction"]
@@ -349,7 +342,7 @@ class TradingBot:
             if pd.isna(atr) or atr <= 0:
                 return
 
-            # 3. 기존 포지션 동적 관리 (4시간봉 시그널 기반)
+            # 3. 기존 포지션 동적 관리 (15분봉 시그널 기반)
             if symbol in self.risk.state.open_positions:
                 self._manage_existing_position(symbol, signal_data=signal_data)
 
@@ -398,7 +391,7 @@ class TradingBot:
             order_type = "시장가" if strength >= ORDER_TYPE_CONFIG["strong_signal_threshold"] else "지정가"
             fmt = lambda p: f"{p:.2f}" if p >= 1 else f"{p:.6f}"
             logger.info(
-                f"[{symbol}] {'🟢 롱' if direction == 1 else '🔴 숏'} 시그널 | "
+                f"[{symbol}] {'롱' if direction == 1 else '숏'} 시그널 | "
                 f"강도: {strength:.2f} | 레버리지: {leverage}x | "
                 f"주문: {order_type} | "
                 f"TP: {fmt(tp_price)} | SL: {fmt(sl_price)}"
@@ -413,7 +406,7 @@ class TradingBot:
                 tp_sl_ratio=tp_mult / sl_mult,
                 leverage=leverage,
                 signal_grade=f"str_{strength:.2f}",
-                strategy="channel_breakout_v2",
+                strategy="multi_tf_scalp_v4",
                 signal_strength=strength,
             )
 
@@ -447,7 +440,6 @@ class TradingBot:
             # 내부 상태에는 있지만 Bybit에 없는 포지션 = 청산됨
             tracked_symbols = list(self.risk.state.open_positions.keys())
             for symbol in tracked_symbols:
-                # pending 지정가 주문은 아직 Bybit에 포지션이 없으므로 스킵
                 pos_status = self.risk.state.open_positions[symbol].get("status")
                 if pos_status == "pending":
                     continue
@@ -457,10 +449,9 @@ class TradingBot:
                     entry_price = pos_info.get("entry_price", 0)
                     qty = pos_info.get("quantity", 0)
 
-                    # 현재가 조회하여 대략적 PnL 추정
                     current_price = 0
                     estimated_pnl = 0
-                    pnl_emoji = "❓"
+                    pnl_emoji = "?"
                     reason = "서버사이드 청산 감지"
 
                     try:
@@ -472,12 +463,12 @@ class TradingBot:
                         else:
                             estimated_pnl = (entry_price - current_price) * qty
 
-                        pnl_emoji = "🟢" if estimated_pnl >= 0 else "🔴"
+                        pnl_emoji = "+" if estimated_pnl >= 0 else "-"
                         reason = "TP 체결 (추정)" if estimated_pnl >= 0 else "SL 체결 (추정)"
                     except Exception:
                         pass
 
-                    logger.info(f"[{symbol}] 서버사이드 청산 감지 — {reason}")
+                    logger.info(f"[{symbol}] 서버사이드 청산 감지 -- {reason}")
 
                     # 내부 상태 정리
                     del self.risk.state.open_positions[symbol]
@@ -509,7 +500,7 @@ class TradingBot:
                 symbol = p["symbol"]
                 if symbol not in self.risk.state.open_positions:
                     if len(self.risk.state.open_positions) >= max_pos:
-                        logger.warning(f"[{symbol}] 외부 포지션 감지 but 포지션 한도 초과 — 추적만 함")
+                        logger.warning(f"[{symbol}] 외부 포지션 감지 but 포지션 한도 초과 -- 추적만 함")
                     side = "long" if p["side"] == "Buy" else "short"
                     self.risk.state.open_positions[symbol] = {
                         "side": side,
@@ -523,32 +514,33 @@ class TradingBot:
                         "highest_price": p["entry_price"],
                         "lowest_price": p["entry_price"],
                     }
-                    logger.info(f"[{symbol}] 신규 포지션 감지 (외부 진입) — "
+                    logger.info(f"[{symbol}] 신규 포지션 감지 (외부 진입) -- "
                                 f"{side.upper()} qty={p['size']}")
 
         except Exception as e:
             logger.error(f"포지션 청산 감지 에러: {e}", exc_info=True)
 
     def on_candle_close(self):
-        """4시간봉 캔들 완성 시 실행"""
+        """15분봉 캔들 완성 시 실행"""
         now = datetime.now(timezone.utc)
-        logger.info(f"\n{'━'*50}")
-        logger.info(f"📊 캔들 완성 — {now.strftime('%Y-%m-%d %H:%M')} UTC")
+        logger.info(f"\n{'='*50}")
+        logger.info(f"15min 캔들 완성 -- {now.strftime('%Y-%m-%d %H:%M')} UTC")
 
         self.risk.reset_daily()
 
         if self.safe_mode:
-            logger.warning("안전모드 — 매매 중단")
+            logger.warning("안전모드 -- 매매 중단")
             return
 
         if self.risk.should_emergency_close():
-            logger.warning("⚠️ 긴급 청산!")
+            logger.warning("긴급 청산!")
             self.order_mgr.emergency_close_all()
             self.safe_mode = True
             return
 
-        # 전략 심볼 갱신 (거래량 상위 100개)
-        self.strategy_symbols = self._load_strategy_symbols()
+        # 전략 심볼 갱신 (매시 정각에만, 15분마다 갱신하면 API 부하)
+        if now.minute < 5:
+            self.strategy_symbols = self._load_strategy_symbols()
 
         # 포지션 청산 감지 (TP/SL 서버사이드 체결)
         self._check_position_closures()
@@ -556,7 +548,7 @@ class TradingBot:
         # 모든 모니터링 심볼 처리 (전략 심볼 + 보유 포지션 심볼)
         for symbol in self.symbols:
             self.process_symbol(symbol)
-            time.sleep(0.5)
+            time.sleep(0.3)
 
         # 현황 출력
         balance = self.client.get_balance()
@@ -620,7 +612,6 @@ class TradingBot:
                             " | ".join(summaries))
             else:
                 # 포지션 없을 때는 5분마다만 로그
-                from datetime import datetime, timezone
                 now = datetime.now(timezone.utc)
                 if now.minute % 5 == 0:
                     pending = sum(1 for p in self.risk.state.open_positions.values()
@@ -670,24 +661,25 @@ class TradingBot:
     def run(self):
         """메인 루프"""
         self._start_health_server()
-        logger.info("🚀 봇 시작!")
+        logger.info("봇 시작!")
 
         pos_list = list(self.risk.state.open_positions.keys())
         notify("봇 시작", (
-            f"ATM v3.0 | {'테스트넷' if BYBIT_TESTNET else '메인넷'}\n"
+            f"Multi-TF Scalp v4.0 | {'테스트넷' if BYBIT_TESTNET else '메인넷'}\n"
+            f"타임프레임: 15분봉 (4H 크로스검증)\n"
             f"모니터링: 거래량 상위 {len(self.strategy_symbols)}개 심볼\n"
             f"시장가 기준: 강도 >= {ORDER_TYPE_CONFIG['strong_signal_threshold']}\n"
             f"수수료: Maker 0.02% / Taker 0.055%\n"
             f"기존 포지션 동기화: {len(pos_list)}개 {pos_list}"
         ))
 
-        # 4시간 마감 시각 (UTC)
-        for hour in ["00:01", "04:01", "08:01", "12:01", "16:01", "20:01"]:
-            schedule.every().day.at(hour).do(self.on_candle_close)
+        # 15분 마감 시각 (매시 :01, :16, :31, :46)
+        for minute in ["01", "16", "31", "46"]:
+            schedule.every().hour.at(f":{minute}").do(self.on_candle_close)
 
         schedule.every(1).minutes.do(self.monitor)
 
-        # 정기 브리핑: KST 09:00 / 15:00 / 21:00 / 03:00 → UTC 00:00 / 06:00 / 12:00 / 18:00
+        # 정기 브리핑: KST 09:00 / 15:00 / 21:00 / 03:00 -> UTC 00:00 / 06:00 / 12:00 / 18:00
         for hour in ["00:00", "06:00", "12:00", "18:00"]:
             schedule.every().day.at(hour).do(self.briefing)
 
@@ -711,7 +703,7 @@ class TradingBot:
 
                 if consecutive_errors >= max_consecutive_errors:
                     error_msg = (
-                        f"연속 에러 {consecutive_errors}회 발생 — 봇 중단\n"
+                        f"연속 에러 {consecutive_errors}회 발생 -- 봇 중단\n"
                         f"마지막 에러: {str(e)[:200]}\n"
                         f"시각: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"
                     )

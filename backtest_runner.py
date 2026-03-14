@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Multi-Period Backtest Runner v3.0
-- Period 1: Recent 1 year (2025-03 ~ 2026-03)
-- Period 2: 3 years ago 1 year (2022-03 ~ 2023-03)
-- Period 3: COVID era 1 year (2020-03 ~ 2021-03)
+Multi-Period Backtest Runner v4.0
+- 15-minute candles with 4H cross-validation
+- Period 1: Recent 6 months (2025-09 ~ 2026-03)
+- Period 2: 2 years ago 6 months (2023-09 ~ 2024-03)
+- Period 3: 3 years ago 6 months (2022-09 ~ 2023-03)
+
+Note: 6 months of 15min data = ~17,500 candles per period
 """
 import sys
 import os
@@ -19,8 +22,8 @@ logger = setup_logger("backtest_runner")
 
 
 def fetch_period_data(symbol: str, start_date: str, end_date: str,
-                      timeframe: str = "4h") -> "pd.DataFrame":
-    """Fetch OHLCV data for a specific date range"""
+                      timeframe: str = "15m") -> "pd.DataFrame":
+    """Fetch OHLCV data for a specific date range (15-minute candles)"""
     import pandas as pd
 
     exchange = get_exchange()
@@ -30,7 +33,7 @@ def fetch_period_data(symbol: str, start_date: str, end_date: str,
     # Calculate days from start_date to now
     days_ago = (datetime.utcnow() - start_dt).days + 1
 
-    logger.info(f"[{symbol}] Fetching {start_date} ~ {end_date} ({days_ago} days ago)...")
+    logger.info(f"[{symbol}] Fetching {timeframe} data: {start_date} ~ {end_date} ({days_ago} days ago)...")
 
     df = fetch_ohlcv(symbol, timeframe, since_days=days_ago, exchange=exchange)
 
@@ -41,7 +44,7 @@ def fetch_period_data(symbol: str, start_date: str, end_date: str,
     df = df[(df["timestamp"] >= start_date) & (df["timestamp"] <= end_date)]
     df = df.reset_index(drop=True)
 
-    logger.info(f"[{symbol}] {len(df)} candles in range")
+    logger.info(f"[{symbol}] {len(df)} candles in range ({timeframe})")
     return df
 
 
@@ -51,16 +54,16 @@ def run_backtest_period(symbol: str, df, period_name: str,
     if config is None:
         config = BacktestConfig(
             initial_capital=10000.0,
-            fee_rate=0.0006,
-            slippage_rate=0.0005,
-            leverage=3,
+            fee_rate=0.0002,   # Maker fee only
+            slippage_rate=0.0001,  # Minimal slippage (limit orders)
+            leverage=15,
             exit_type="fixed_tp_sl",
-            max_bars=60,
+            max_bars=0,               # Disabled: only TP/SL
             use_signal_leverage=True,
         )
 
     engine = BacktestEngine(config)
-    result = engine.run(df, strategy_name=f"ATM_v3_{period_name}", symbol=symbol)
+    result = engine.run(df, strategy_name=f"MultiTF_Scalp_v4_{period_name}", symbol=symbol)
 
     return {
         "period": period_name,
@@ -93,10 +96,11 @@ def print_result(info: dict):
     logger.info(f"  Avg Bars Held:  {r.avg_bars_held:>8.1f}")
     logger.info(f"{'='*60}")
 
-    # Print individual trades
+    # Print individual trades (limit to first 50 for readability)
     if r.trades:
-        logger.info(f"\n  Trade Details:")
-        for t in r.trades:
+        display_trades = r.trades[:50]
+        logger.info(f"\n  Trade Details ({len(display_trades)} of {len(r.trades)}):")
+        for t in display_trades:
             emoji = "+" if t.pnl > 0 else "-"
             logger.info(
                 f"    {emoji} {t.side:5s} {t.entry_time[:16]} -> {t.exit_time[:16]} | "
@@ -104,20 +108,23 @@ def print_result(info: dict):
                 f"Lev: {t.leverage}x | PnL: {t.pnl:+.2f} ({t.pnl_pct:+.1f}%) | "
                 f"{t.exit_reason}"
             )
+        if len(r.trades) > 50:
+            logger.info(f"    ... and {len(r.trades) - 50} more trades")
 
 
 def main():
     logger.info("=" * 60)
-    logger.info("Multi-Period Backtest — ATM Strategy v3.0")
+    logger.info("Multi-Period Backtest -- Multi-TF Scalp Strategy v4.0")
+    logger.info("Timeframe: 15min (with 4H resampling)")
     logger.info("=" * 60)
 
     symbol = "BTCUSDT"
 
-    # === Period definitions ===
+    # === Period definitions (6 months each to manage data volume) ===
     periods = [
-        ("Period1_Recent_1yr", "2025-03-14", "2026-03-14"),
-        ("Period2_3yr_ago", "2022-03-14", "2023-03-14"),
-        ("Period3_COVID", "2020-03-14", "2021-03-14"),
+        ("Period1_Recent_6mo", "2025-09-14", "2026-03-14"),
+        ("Period2_2yr_ago_6mo", "2023-09-14", "2024-03-14"),
+        ("Period3_3yr_ago_6mo", "2022-09-14", "2023-03-14"),
     ]
 
     all_results = []
@@ -127,9 +134,9 @@ def main():
         logger.info(f"# {period_name}: {start} ~ {end}")
         logger.info(f"{'#'*60}")
 
-        df = fetch_period_data(symbol, start, end)
-        if df.empty or len(df) < 100:
-            logger.error(f"  Insufficient data for {period_name}")
+        df = fetch_period_data(symbol, start, end, timeframe="15m")
+        if df.empty or len(df) < 500:
+            logger.error(f"  Insufficient data for {period_name} (need >= 500 candles)")
             continue
 
         info = run_backtest_period(symbol, df, period_name)
@@ -139,7 +146,7 @@ def main():
     # === Summary ===
     if all_results:
         logger.info(f"\n{'#'*60}")
-        logger.info(f"# SUMMARY — All Periods")
+        logger.info(f"# SUMMARY -- All Periods")
         logger.info(f"{'#'*60}")
         for info in all_results:
             r = info["result"]
