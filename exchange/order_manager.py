@@ -176,10 +176,10 @@ class OrderManager:
         tp = self.client.round_price(symbol, tp)
         sl = self.client.round_price(symbol, sl)
 
-        # 시그널 강도 기반 비중 조절
-        if signal_strength >= 0.7:
-            size_mult = 1.5
-        elif signal_strength >= 0.4:
+        # 시그널 강도 기반 비중 조절 (v3.0: 더 보수적)
+        if signal_strength >= 0.8:
+            size_mult = 1.3
+        elif signal_strength >= 0.5:
             size_mult = 1.0
         else:
             size_mult = 0.7
@@ -445,6 +445,158 @@ class OrderManager:
                                 f"(강도 {signal_strength:.2f}, ATR×{sl_atr_mult:.1f})")
                 except Exception as e:
                     logger.warning(f"[{symbol}] SL 갱신 실패: {e}")
+
+    def execute_pyramid(
+        self,
+        symbol: str,
+        side: str,
+        current_price: float,
+        atr: float,
+        signal_strength: float,
+        leverage: int,
+    ) -> Optional[dict]:
+        """
+        기존 포지션에 추가 진입 (피라미딩)
+        조건: 같은 방향 강한 시그널 + 수익 중 + 1회 제한
+        """
+        pos_info = self.risk.state.open_positions.get(symbol)
+        if not pos_info or pos_info.get("status") == "pending":
+            return None
+
+        # 이미 피라미딩 했으면 스킵
+        if pos_info.get("pyramided"):
+            return None
+
+        entry = pos_info["entry_price"]
+        original_qty = pos_info.get("original_qty", pos_info["quantity"])
+        current_qty = pos_info["quantity"]
+
+        # 수익률 체크 (2% 이상)
+        if side == "long":
+            unrealized_pct = (current_price - entry) / entry
+        else:
+            unrealized_pct = (entry - current_price) / entry
+
+        if unrealized_pct < 0.02:
+            logger.debug(f"[{symbol}] 피라미딩 조건 미달: 수익 {unrealized_pct:.1%} < 2%")
+            return None
+
+        # 추가 수량: 원래 포지션의 50%
+        add_qty = original_qty * 0.5
+
+        # 강도 >= 0.8이면 레버리지 1단계 상승
+        new_lev = self.risk.get_effective_leverage(leverage)
+        if signal_strength >= 0.8:
+            new_lev = self.risk.get_effective_leverage(leverage + 5)
+            try:
+                self.client.set_leverage(symbol, new_lev)
+                logger.info(f"[{symbol}] 피라미딩 레버리지 상승: {leverage}x → {new_lev}x")
+            except Exception as e:
+                logger.warning(f"[{symbol}] 레버리지 변경 실패 (기존 유지): {e}")
+
+        # 잔고 체크
+        balance = self.client.get_balance()
+        available = balance["available"]
+        margin_needed = (add_qty * current_price) / new_lev
+        if margin_needed > available * 0.8:
+            # 가용 잔고의 80%까지만 사용
+            add_qty = (available * 0.8 * new_lev) / current_price
+            if add_qty <= 0:
+                logger.warning(f"[{symbol}] 피라미딩 불가: 잔고 부족 (가용: {available:.2f} USDT)")
+                return None
+
+        add_qty = self.client.round_qty(symbol, add_qty)
+
+        # 최소 수량 검증
+        try:
+            info = self.client.get_instrument_info(symbol)
+            if add_qty < info["min_qty"]:
+                logger.warning(f"[{symbol}] 피라미딩 수량 {add_qty} < 최소 {info['min_qty']}")
+                return None
+            if add_qty * current_price < info["min_notional"]:
+                logger.warning(f"[{symbol}] 피라미딩 주문금액 부족")
+                return None
+        except Exception:
+            pass
+
+        # 시장가 추가 진입
+        order_side = "Buy" if side == "long" else "Sell"
+        try:
+            order = self.client.market_order(symbol, order_side, add_qty)
+
+            # 평균 진입가 계산
+            total_qty = current_qty + add_qty
+            avg_entry = (entry * current_qty + current_price * add_qty) / total_qty
+
+            # SL 재조정: 평균 진입가 기준 ATR 2.5배
+            sl_mult = 2.5
+            pos_idx = 1 if side == "long" else 2
+            if side == "long":
+                new_sl = self.client.round_price(symbol, avg_entry - atr * sl_mult)
+            else:
+                new_sl = self.client.round_price(symbol, avg_entry + atr * sl_mult)
+
+            # TP는 기존 유지 (이미 넓게 잡혀있음)
+            current_tp = pos_info.get("tp", 0)
+
+            try:
+                self.client.set_tp_sl(
+                    symbol, take_profit=current_tp if current_tp > 0 else None,
+                    stop_loss=new_sl, position_idx=pos_idx,
+                )
+            except Exception as e:
+                logger.warning(f"[{symbol}] 피라미딩 SL 재설정 실패: {e}")
+
+            # 내부 상태 업데이트
+            pos_info["entry_price"] = avg_entry
+            pos_info["quantity"] = total_qty
+            pos_info["sl"] = new_sl
+            pos_info["pyramided"] = True
+            # 트레일링 기준 리셋 (평균 진입가 기준)
+            if side == "long":
+                pos_info["highest_price"] = max(pos_info.get("highest_price", current_price), current_price)
+            else:
+                pos_info["lowest_price"] = min(pos_info.get("lowest_price", current_price), current_price)
+
+            fee_amount = current_price * add_qty * FEES["taker"]
+
+            record_trade(
+                symbol=symbol, side=side, action="pyramid",
+                price=current_price, quantity=add_qty, leverage=new_lev,
+                fee=fee_amount,
+                note=f"pyramid | avg_entry: {avg_entry:.6f} | total_qty: {total_qty} | str: {signal_strength:.2f}",
+            )
+
+            logger.info(
+                f"[{symbol}] 🔺 피라미딩 추가 진입 | "
+                f"+{add_qty} (총 {total_qty}) | "
+                f"평균 진입가: {_fmt_price(avg_entry)} | "
+                f"새 SL: {_fmt_price(new_sl)} | "
+                f"강도: {signal_strength:.2f}"
+            )
+
+            notify("피라미딩 추가 진입", (
+                f"🔺 {symbol}\n"
+                f"방향: {side.upper()}\n"
+                f"추가 수량: {add_qty} (원래의 50%)\n"
+                f"총 수량: {total_qty}\n"
+                f"평균 진입가: {_fmt_price(avg_entry)}\n"
+                f"새 SL: {_fmt_price(new_sl)}\n"
+                f"시그널 강도: {signal_strength:.2f}\n"
+                f"레버리지: {new_lev}x\n"
+                f"수익률: {unrealized_pct:.1%}"
+            ), level="trade")
+
+            return {
+                "symbol": symbol, "side": side,
+                "add_qty": add_qty, "total_qty": total_qty,
+                "avg_entry": avg_entry, "new_sl": new_sl,
+            }
+
+        except Exception as e:
+            logger.error(f"[{symbol}] 피라미딩 주문 실패: {e}")
+            notify("피라미딩 실패", f"{symbol}: {e}", level="error")
+            return None
 
     def emergency_close_all(self):
         """긴급: 모든 포지션 즉시 청산"""

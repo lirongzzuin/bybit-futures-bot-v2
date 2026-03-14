@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-암호화폐 선물 자동매매 봇 — v2.2
+암호화폐 선물 자동매매 봇 — v3.0
 
-전략: Channel Breakout + Momentum (동적 레버리지)
+전략: ATM (Adaptive Trend-Momentum) — 시장 레짐 적응형
 거래소: Bybit USDT 무기한 선물
 타임프레임: 4시간봉
 
-v2.2 변경사항:
-  - 시작 시 Bybit 기존 포지션 동기화
-  - 보유 포지션 심볼 동적 모니터링
-  - TP/SL 서버사이드 체결 감지 + 슬랙 알림
-  - 봇 종료/크래시 슬랙 알림
+v3.0 변경사항:
+  - 전략 전면 재설계: EMA(9/21/50/200) + ADX/DMI + RSI + MACD + BB
+  - 매크로 트렌드 필터 (EMA200): 추세 방향으로만 거래
+  - 동적 SL/TP: ATR 변동성 기반 자동 조정
+  - 보수적 레버리지 (2~7x, 기존 최대 30x)
+  - 리스크 1.5%/거래, 최대 3 동시 포지션
+  - 3개 기간 백테스트 검증 (최근/약세장/코로나)
 
 실행: python main.py
 """
@@ -33,7 +35,7 @@ from strategy.final_strategy import (
     generate_signals, get_current_signal, calc_atr,
     OPTIMAL_PARAMS, ENGINE_CONFIG,
 )
-from strategy.signal_generator import compute_indicators
+# compute_indicators no longer needed — ATM strategy computes its own indicators
 from exchange.bybit_client import BybitClient
 from exchange.order_manager import OrderManager
 from strategy.risk_manager import RiskManager
@@ -51,13 +53,14 @@ class TradingBot:
     def __init__(self):
         mode = "테스트넷" if BYBIT_TESTNET else "⚠️ 메인넷"
         logger.info("=" * 60)
-        logger.info(f"암호화폐 선물 자동매매 봇 v2.2")
+        logger.info(f"암호화폐 선물 자동매매 봇 v3.0")
         logger.info(f"  모드: {mode}")
-        logger.info(f"  전략: Channel Breakout + Momentum")
+        logger.info(f"  전략: ATM (Adaptive Trend-Momentum)")
         logger.info(f"  레버리지: {OPTIMAL_PARAMS['base_leverage']}x ~ {OPTIMAL_PARAMS['max_leverage']}x (동적)")
         logger.info(f"  리스크: 거래당 {ENGINE_CONFIG['risk_per_trade']*100}%")
-        logger.info(f"  SL: ATR {OPTIMAL_PARAMS['sl_atr_mult']}x / TP: ATR {OPTIMAL_PARAMS['tp_atr_mult']}x+")
+        logger.info(f"  SL: ATR {OPTIMAL_PARAMS['sl_atr_mult']}x / TP: ATR {OPTIMAL_PARAMS['tp_atr_mult_trend']}x")
         logger.info(f"  시장가 기준: 강도 >= {ORDER_TYPE_CONFIG['strong_signal_threshold']}")
+        logger.info(f"  매크로 필터: EMA{OPTIMAL_PARAMS['ema_macro']}")
         logger.info("=" * 60)
 
         # 거래소 클라이언트
@@ -83,9 +86,9 @@ class TradingBot:
         signal.signal(signal.SIGINT, self._handle_shutdown)
 
     def _load_strategy_symbols(self) -> list[str]:
-        """거래량 상위 100개 USDT 무기한 선물 심볼 로드"""
+        """거래량 상위 20개 USDT 무기한 선물 심볼 로드"""
         try:
-            symbols = self.client.get_top_symbols_by_volume(limit=100)
+            symbols = self.client.get_top_symbols_by_volume(limit=20)
             logger.info(f"  전략 대상: 거래량 상위 {len(symbols)}개 심볼")
             return symbols
         except Exception as e:
@@ -329,14 +332,12 @@ class TradingBot:
     def process_symbol(self, symbol: str):
         """심볼별 시그널 처리"""
         try:
-            # 1. 데이터 수집 + 지표 계산
+            # 1. 데이터 수집 (ATM 전략은 자체 지표 계산)
             df = self.fetch_data(symbol)
             if df.empty or len(df) < 100:
                 return
 
-            df = compute_indicators(df)
-
-            # 2. 시그널 생성
+            # 2. 시그널 생성 (ATM v3.0)
             signal_data = get_current_signal(df)
 
             direction = signal_data["direction"]
@@ -351,7 +352,27 @@ class TradingBot:
             # 3. 기존 포지션 동적 관리 (4시간봉 시그널 기반)
             if symbol in self.risk.state.open_positions:
                 self._manage_existing_position(symbol, signal_data=signal_data)
-                return  # 기존 포지션 있으면 신규 진입 안 함
+
+                # 피라미딩: 같은 방향 강한 시그널 (강도 >= 0.7) + 수익 중이면 추가 진입
+                if direction != 0 and strength >= 0.7:
+                    pos_info = self.risk.state.open_positions.get(symbol)
+                    if pos_info and pos_info.get("status") != "pending":
+                        pos_side = pos_info["side"]
+                        signal_side = "long" if direction == 1 else "short"
+                        if pos_side == signal_side and not pos_info.get("pyramided"):
+                            logger.info(
+                                f"[{symbol}] 피라미딩 조건 검토 | "
+                                f"강도: {strength:.2f} | 방향: {signal_side}"
+                            )
+                            self.order_mgr.execute_pyramid(
+                                symbol=symbol,
+                                side=pos_side,
+                                current_price=price,
+                                atr=atr,
+                                signal_strength=strength,
+                                leverage=leverage,
+                            )
+                return
 
             # 4. 신규 진입 (전략 심볼에만 적용)
             if symbol not in self.strategy_symbols:
@@ -582,8 +603,9 @@ class TradingBot:
                         else:
                             pnl_pct = (entry - price) / entry * 100
 
+                        pyr = "P" if pos_info.get("pyramided") else ""
                         summaries.append(
-                            f"{symbol} {side[0].upper()} "
+                            f"{symbol} {side[0].upper()}{pyr} "
                             f"pnl={pnl_pct:+.2f}% "
                             f"SL={sl} TP={tp}"
                         )
@@ -652,7 +674,7 @@ class TradingBot:
 
         pos_list = list(self.risk.state.open_positions.keys())
         notify("봇 시작", (
-            f"Channel Breakout v2.2 | {'테스트넷' if BYBIT_TESTNET else '메인넷'}\n"
+            f"ATM v3.0 | {'테스트넷' if BYBIT_TESTNET else '메인넷'}\n"
             f"모니터링: 거래량 상위 {len(self.strategy_symbols)}개 심볼\n"
             f"시장가 기준: 강도 >= {ORDER_TYPE_CONFIG['strong_signal_threshold']}\n"
             f"수수료: Maker 0.02% / Taker 0.055%\n"
