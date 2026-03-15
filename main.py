@@ -53,15 +53,13 @@ class TradingBot:
     def __init__(self):
         mode = "테스트넷" if BYBIT_TESTNET else "메인넷"
         logger.info("=" * 60)
-        logger.info(f"암호화폐 선물 자동매매 봇 v4.0")
+        logger.info(f"암호화폐 선물 자동매매 봇 v6.0")
         logger.info(f"  모드: {mode}")
-        logger.info(f"  전략: Multi-TF Scalp (15min + 4H cross-validation)")
+        logger.info(f"  전략: Dual-Mode Adaptive (추세추종 + 평균회귀)")
         logger.info(f"  타임프레임: 15분봉 (4H 리샘플링)")
-        logger.info(f"  레버리지: {OPTIMAL_PARAMS['base_leverage']}x ~ {OPTIMAL_PARAMS['max_leverage']}x (동적)")
+        logger.info(f"  추세: TP {OPTIMAL_PARAMS['tf_tp_atr_mult']}x / SL {OPTIMAL_PARAMS['tf_sl_atr_mult']}x / {OPTIMAL_PARAMS['tf_leverage']}x lev")
+        logger.info(f"  횡보: TP {OPTIMAL_PARAMS['mr_tp_atr_mult']}x / SL {OPTIMAL_PARAMS['mr_sl_atr_mult']}x / {OPTIMAL_PARAMS['mr_leverage']}x lev")
         logger.info(f"  리스크: 거래당 {ENGINE_CONFIG['risk_per_trade']*100}%")
-        logger.info(f"  SL: ATR {OPTIMAL_PARAMS['sl_atr_mult']}x / TP: ATR {OPTIMAL_PARAMS['tp_atr_mult']}x")
-        logger.info(f"  시장가 기준: 강도 >= {ORDER_TYPE_CONFIG['strong_signal_threshold']}")
-        logger.info(f"  매크로 필터: EMA{OPTIMAL_PARAMS['ema_macro']}")
         logger.info("=" * 60)
 
         # 거래소 클라이언트
@@ -330,7 +328,7 @@ class TradingBot:
             if df.empty or len(df) < 100:
                 return
 
-            # 2. 시그널 생성 (Multi-TF Scalp v4.0)
+            # 2. 시그널 생성 (Dual-Mode Adaptive v6.0)
             signal_data = get_current_signal(df)
 
             direction = signal_data["direction"]
@@ -406,7 +404,7 @@ class TradingBot:
                 tp_sl_ratio=tp_mult / sl_mult,
                 leverage=leverage,
                 signal_grade=f"str_{strength:.2f}",
-                strategy="multi_tf_scalp_v4",
+                strategy="dual_mode_adaptive_v6",
                 signal_strength=strength,
             )
 
@@ -665,7 +663,7 @@ class TradingBot:
 
         pos_list = list(self.risk.state.open_positions.keys())
         notify("봇 시작", (
-            f"Multi-TF Scalp v4.0 | {'테스트넷' if BYBIT_TESTNET else '메인넷'}\n"
+            f"Dual-Mode Adaptive v6.0 | {'테스트넷' if BYBIT_TESTNET else '메인넷'}\n"
             f"타임프레임: 15분봉 (4H 크로스검증)\n"
             f"모니터링: 거래량 상위 {len(self.strategy_symbols)}개 심볼\n"
             f"시장가 기준: 강도 >= {ORDER_TYPE_CONFIG['strong_signal_threshold']}\n"
