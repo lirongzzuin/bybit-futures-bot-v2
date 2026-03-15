@@ -59,9 +59,10 @@ def run_backtest_period(symbol: str, df, period_name: str,
             fee_rate=0.0002,           # Maker fee only (limit orders)
             slippage_rate=0.0001,      # Minimal slippage (limit orders)
             leverage=20,               # Default 20x (overridden by signal)
-            exit_type="fixed_tp_sl",
-            max_bars=0,                # No time exit -- only TP/SL
+            exit_type="fixed_tp_sl",   # Fixed TP/SL (no trailing)
+            max_bars=0,
             use_signal_leverage=True,
+            atr_trailing_mult=2.0,
         )
 
     engine = BacktestEngine(config)
@@ -148,9 +149,12 @@ def main():
 
     # === Period definitions (6 months each to manage data volume) ===
     periods = [
-        ("Period1_Recent_6mo", "2025-09-14", "2026-03-14"),
-        ("Period2_2yr_ago_6mo", "2023-09-14", "2024-03-14"),
-        ("Period3_3yr_ago_6mo", "2022-09-14", "2023-03-14"),
+        ("P1_Recent_6mo", "2025-09-14", "2026-03-14"),
+        ("P2_2024H2", "2024-09-14", "2025-03-14"),
+        ("P3_2024H1", "2024-03-14", "2024-09-14"),
+        ("P4_2023H2", "2023-09-14", "2024-03-14"),
+        ("P5_2023H1", "2023-03-14", "2023-09-14"),
+        ("P6_2022H2", "2022-09-14", "2023-03-14"),
     ]
 
     all_results = []

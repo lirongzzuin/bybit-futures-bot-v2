@@ -123,12 +123,13 @@ class BacktestEngine:
 
             # ── Manage existing position ──
             if position is not None:
-                # Update trailing stop
+                # Apply trailing only for trend-following positions
                 if "trailing" in cfg.exit_type and atr > 0:
-                    mult = cfg.atr_trailing_mult
-                    position = ExitCondition.update_trailing_stop(
-                        position, current_price, atr, mult
-                    )
+                    if position.strategy == "trend":
+                        mult = cfg.atr_trailing_mult
+                        position = ExitCondition.update_trailing_stop(
+                            position, current_price, atr, mult
+                        )
 
                 bars_held = i - position.entry_index
 
@@ -266,6 +267,11 @@ class BacktestEngine:
                 )
 
                 if quantity > 0:
+                    # Map sig_mode to string for per-mode trailing
+                    sig_mode_val = int(row.get("sig_mode", 0))
+                    sig_mode_map = {0: "none", 1: "trend", 2: "range", 3: "transition"}
+                    sig_mode_str = sig_mode_map.get(sig_mode_val, "none")
+
                     position = Position(
                         symbol=symbol,
                         side=side,
@@ -278,7 +284,7 @@ class BacktestEngine:
                         highest_price=entry_price,
                         lowest_price=entry_price,
                         signal_grade=f"str_{sig_strength:.2f}",
-                        strategy=strategy_name,
+                        strategy=sig_mode_str,
                     )
                     risk_mgr.state.open_positions[symbol] = True
 
