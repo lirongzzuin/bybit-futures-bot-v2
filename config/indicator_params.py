@@ -1,7 +1,7 @@
 """
-Indicator & Trading Parameters v3.0
-- ATM (Adaptive Trend-Momentum) strategy params
-- Conservative risk management
+Indicator & Trading Parameters v5.0
+- Compound Growth Machine v5.0 strategy params
+- Aggressive risk management for 10,000%+ annual compound growth
 """
 
 # === Candle Master Plan (legacy, kept for compute_indicators compatibility) ===
@@ -42,21 +42,21 @@ VOLUME = {
     "ma_length": 20,
 }
 
-# === Trading Config (v4.0 — 15min scalping with 4H cross-validation) ===
+# === Trading Config (v5.0 — Compound Growth Machine) ===
 TRADING = {
     "exchange": "bybit",
-    "default_leverage": 15,
+    "default_leverage": 20,
     "max_leverage": 25,
-    "default_timeframe": "15",    # 15-minute candles (4H via resampling)
-    "risk_per_trade": 0.001,      # 0.1% x 10x avg = ~1% actual risk
-    "max_open_positions": 5,      # More positions for scalping
-    "max_daily_loss": 0.08,       # 8% daily max loss
+    "default_timeframe": "15",        # 15-minute candles (4H via resampling)
+    "risk_per_trade": 0.002,          # 0.2% x 20x = ~4% actual risk
+    "max_open_positions": 5,
+    "max_daily_loss": 0.15,           # 15% daily max loss (aggressive)
 }
 
 # === Fee Config (Bybit USDT perpetual) ===
 FEES = {
-    "maker": 0.0002,              # Limit: 0.02%
-    "taker": 0.00055,             # Market: 0.055%
+    "maker": 0.0002,                  # Limit: 0.02%
+    "taker": 0.00055,                 # Market: 0.055%
 }
 
 # === Order Type Config ===
