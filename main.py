@@ -174,10 +174,16 @@ class TradingBot:
 
     def _manage_existing_position(self, symbol: str, signal_data: dict = None):
         """
-        기존 포지션 실시간 동적 관리 (1분마다 호출)
-        - 반대 시그널 -> 즉시 전량 청산
-        - 트레일링 SL: 수익 방향으로 SL 끌어올림
-        - 부분 익절: TP 50% 도달 시 절반 청산 + SL 본전 이동
+        포지션 동적 관리 v6.0 — 수익 극대화 시스템
+
+        단계별 관리:
+          Stage 0: 안전장치 (SL 없으면 설정, 급락 -8% 긴급 청산)
+          Stage 1: 본전 보호 (수익 1%+) — SL을 본전으로 이동
+          Stage 2: 트레일링 SL (수익 2%+) — 단계별 비율 강화
+          Stage 3: 부분 익절 (TP 50%) — 30% 청산
+          Stage 4: TP 확대 (TP 80%) — 무한 반복 확대
+          Stage 5: 추가 부분 익절 (TP 200%) — 또 30% 청산
+          Stage 6: 최종 잔여분 — 매우 타이트한 트레일링으로 보호
         """
         pos_info = self.risk.state.open_positions.get(symbol)
         if not pos_info or pos_info.get("status") == "pending":
@@ -187,6 +193,7 @@ class TradingBot:
         entry = pos_info["entry_price"]
         tp = pos_info.get("tp", 0)
         sl = pos_info.get("sl", 0)
+        pos_idx = 1 if side == "long" else 2
 
         # 현재가 조회
         try:
@@ -194,7 +201,6 @@ class TradingBot:
             price = ticker["last_price"]
         except Exception:
             return
-
         if price <= 0:
             return
 
@@ -204,121 +210,169 @@ class TradingBot:
         else:
             unrealized_pct = (entry - price) / entry
 
-        # TP 진행률
-        if tp > 0 and entry > 0:
+        # TP 진행률 (원래 TP 기준)
+        original_tp_dist = pos_info.get("original_tp_dist", 0)
+        if original_tp_dist == 0 and tp > 0:
+            original_tp_dist = abs(tp - entry)
+            pos_info["original_tp_dist"] = original_tp_dist
+
+        if original_tp_dist > 0:
             if side == "long":
-                tp_progress = (price - entry) / (tp - entry) if tp != entry else 0
+                tp_progress = (price - entry) / original_tp_dist
             else:
-                tp_progress = (entry - price) / (entry - tp) if tp != entry else 0
+                tp_progress = (entry - price) / original_tp_dist
         else:
             tp_progress = 0
 
-        # === 시그널 기반 관리 (15분봉 캔들 마감 시에만 전달됨) ===
+        # 최고/최저가 추적 (항상)
+        if side == "long":
+            if price > pos_info.get("highest_price", entry):
+                pos_info["highest_price"] = price
+        else:
+            cur_low = pos_info.get("lowest_price", entry)
+            if price < cur_low or cur_low >= entry:
+                pos_info["lowest_price"] = price
+
+        # === 시그널 기반 관리 ===
         if signal_data:
             direction = signal_data["direction"]
             strength = signal_data["strength"]
             atr = signal_data["atr"]
 
-            # A) 반대 시그널 -> 즉시 전량 청산
+            # 반대 시그널 → 즉시 청산
             if direction != 0:
                 is_reverse = (direction == 1 and side == "short") or \
                              (direction == -1 and side == "long")
                 if is_reverse:
-                    logger.info(f"[{symbol}] 반대 시그널 (강도 {strength:.2f}) -> 즉시 청산")
+                    logger.info(f"[{symbol}] 반대 시그널 (강도 {strength:.2f}) → 즉시 청산")
                     self.order_mgr.execute_exit(symbol, reason="reverse_signal")
                     return
 
-            # B) 같은 방향 시그널 발생 -> 동적 SL 조정
-            if direction != 0 and not (
-                (direction == 1 and side == "short") or
-                (direction == -1 and side == "long")
-            ):
-                if strength >= 0.5:
-                    self.order_mgr.update_dynamic_sl(symbol, price, atr, strength)
+            # 같은 방향 강한 시그널 → SL 조정
+            if direction != 0 and strength >= 0.5 and not is_reverse:
+                self.order_mgr.update_dynamic_sl(symbol, price, atr, strength)
 
-        # === 가격 기반 관리 (매 1분) ===
-
-        # 0) 안전장치: SL이 없는 포지션에 기본 SL 설정 (급락 대비)
+        # === Stage 0: 안전장치 ===
         if sl == 0 or (side == "long" and sl <= 0) or (side == "short" and sl <= 0):
-            default_sl_pct = 0.05  # 진입가 대비 5%
+            default_sl_pct = 0.05
             if side == "long":
                 emergency_sl = self.client.round_price(symbol, entry * (1 - default_sl_pct))
-                pos_idx = 1
             else:
                 emergency_sl = self.client.round_price(symbol, entry * (1 + default_sl_pct))
-                pos_idx = 2
             try:
                 self.client.set_tp_sl(symbol, stop_loss=emergency_sl, position_idx=pos_idx)
                 pos_info["sl"] = emergency_sl
                 sl = emergency_sl
-                logger.info(f"[{symbol}] SL 없음 -> 기본 SL 설정: {emergency_sl} (진입가 대비 {default_sl_pct:.0%})")
+                logger.info(f"[{symbol}] SL 없음 → 기본 SL 설정: {emergency_sl}")
             except Exception as e:
-                logger.warning(f"[{symbol}] 기본 SL 설정 실패: {e}")
+                logger.warning(f"[{symbol}] 기본 SL 실패: {e}")
 
-        # 0-1) 급락/급등 강제 청산: 손실 > 8%이면 SL 대기하지 않고 즉시 시장가 청산
+        # 급락 긴급 청산
         if unrealized_pct <= -0.08:
-            logger.warning(f"[{symbol}] 급락 감지! 손실 {unrealized_pct:.1%} -> 긴급 청산")
-            self.order_mgr.execute_exit(symbol, reason=f"emergency_loss_{unrealized_pct:.1%}")
+            logger.warning(f"[{symbol}] 급락! 손실 {unrealized_pct:.1%} → 긴급 청산")
+            self.order_mgr.execute_exit(symbol, reason=f"emergency_{unrealized_pct:.1%}")
             return
 
-        # 1) 트레일링 SL: 수익이 충분할 때만 활성화 (수익 > 3%)
-        if unrealized_pct >= 0.03:
-            if side == "long":
-                highest = pos_info.get("highest_price", entry)
-                if price > highest:
-                    pos_info["highest_price"] = price
-                cur_highest = pos_info.get("highest_price", price)
-                trail_sl = cur_highest - (cur_highest - entry) * 0.4
-                trail_sl = self.client.round_price(symbol, trail_sl)
-                if trail_sl > sl and trail_sl > entry and trail_sl != sl:
-                    try:
-                        self.client.set_tp_sl(symbol, stop_loss=trail_sl, position_idx=1)
-                        pos_info["sl"] = trail_sl
-                        logger.info(f"[{symbol}] 트레일링 SL 갱신: {sl} -> {trail_sl} "
-                                    f"(수익 {unrealized_pct:.1%})")
-                    except Exception as e:
-                        logger.warning(f"[{symbol}] 트레일링 SL 실패: {e}")
+        # === Stage 1: 본전 보호 (수익 1%+) ===
+        if unrealized_pct >= 0.01 and not pos_info.get("breakeven_set"):
+            be_sl = self.client.round_price(symbol, entry)
+            if side == "long" and (sl < entry or sl == 0):
+                try:
+                    self.client.set_tp_sl(symbol, stop_loss=be_sl, position_idx=pos_idx)
+                    pos_info["sl"] = be_sl
+                    pos_info["breakeven_set"] = True
+                    sl = be_sl
+                    logger.info(f"[{symbol}] 본전 SL 설정 (수익 {unrealized_pct:.1%})")
+                except Exception:
+                    pass
+            elif side == "short" and (sl > entry or sl == 0):
+                try:
+                    self.client.set_tp_sl(symbol, stop_loss=be_sl, position_idx=pos_idx)
+                    pos_info["sl"] = be_sl
+                    pos_info["breakeven_set"] = True
+                    sl = be_sl
+                    logger.info(f"[{symbol}] 본전 SL 설정 (수익 {unrealized_pct:.1%})")
+                except Exception:
+                    pass
+
+        # === Stage 2: 단계별 트레일링 SL ===
+        if unrealized_pct >= 0.02:
+            # 수익률에 따른 트레일링 비율 (보호 비율)
+            if unrealized_pct >= 0.10:
+                protect_ratio = 0.80  # 10%+ 수익 → 80% 보호
+            elif unrealized_pct >= 0.05:
+                protect_ratio = 0.65  # 5%+ → 65% 보호
+            elif unrealized_pct >= 0.03:
+                protect_ratio = 0.50  # 3%+ → 50% 보호
             else:
-                lowest = pos_info.get("lowest_price", entry)
-                if price < lowest or lowest >= entry:
-                    pos_info["lowest_price"] = price
-                cur_lowest = pos_info.get("lowest_price", price)
-                trail_sl = cur_lowest + (entry - cur_lowest) * 0.4
+                protect_ratio = 0.35  # 2%+ → 35% 보호
+
+            if side == "long":
+                cur_high = pos_info.get("highest_price", price)
+                trail_sl = entry + (cur_high - entry) * protect_ratio
                 trail_sl = self.client.round_price(symbol, trail_sl)
-                if trail_sl < entry and trail_sl != sl and (trail_sl < sl or sl == 0 or sl >= entry):
+                if trail_sl > sl and trail_sl > entry:
                     try:
-                        self.client.set_tp_sl(symbol, stop_loss=trail_sl, position_idx=2)
+                        self.client.set_tp_sl(symbol, stop_loss=trail_sl, position_idx=pos_idx)
                         pos_info["sl"] = trail_sl
-                        logger.info(f"[{symbol}] 트레일링 SL 갱신: {sl} -> {trail_sl} "
-                                    f"(수익 {unrealized_pct:.1%})")
-                    except Exception as e:
-                        logger.warning(f"[{symbol}] 트레일링 SL 실패: {e}")
+                        logger.info(f"[{symbol}] 트레일링 SL: {sl} → {trail_sl} "
+                                    f"(수익 {unrealized_pct:.1%}, 보호 {protect_ratio:.0%})")
+                    except Exception:
+                        pass
+            else:
+                cur_low = pos_info.get("lowest_price", price)
+                trail_sl = entry - (entry - cur_low) * protect_ratio
+                trail_sl = self.client.round_price(symbol, trail_sl)
+                if (trail_sl < sl or sl >= entry) and trail_sl < entry:
+                    try:
+                        self.client.set_tp_sl(symbol, stop_loss=trail_sl, position_idx=pos_idx)
+                        pos_info["sl"] = trail_sl
+                        logger.info(f"[{symbol}] 트레일링 SL: {sl} → {trail_sl} "
+                                    f"(수익 {unrealized_pct:.1%}, 보호 {protect_ratio:.0%})")
+                    except Exception:
+                        pass
 
-        # 2) 부분 익절: TP 50% 이상 도달 + 아직 미실행
-        if tp_progress >= 0.5 and not pos_info.get("partial_tp_done"):
-            logger.info(f"[{symbol}] TP 진행 {tp_progress:.0%} -> 50% 부분 익절")
+        # === Stage 3: 1차 부분 익절 (TP 50% 도달, 30% 청산) ===
+        if tp_progress >= 0.5 and not pos_info.get("partial_1_done"):
+            logger.info(f"[{symbol}] TP 진행 {tp_progress:.0%} → 1차 부분 익절 (30%)")
             self.order_mgr.execute_partial_close(
-                symbol, close_ratio=0.5,
-                reason=f"partial_tp (진행 {tp_progress:.0%}, 수익 {unrealized_pct:.2%})"
+                symbol, close_ratio=0.3,
+                reason=f"partial_1 (진행 {tp_progress:.0%}, 수익 {unrealized_pct:.1%})"
             )
+            pos_info["partial_1_done"] = True
 
-        # 3) TP 확대: TP 80% 도달 + 강한 모멘텀 -> TP를 50% 더 확대
+        # === Stage 4: TP 무한 확대 (TP 80% 도달할 때마다) ===
         if tp_progress >= 0.8 and tp > 0:
-            tp_extension = pos_info.get("tp_extended", False)
-            if not tp_extension:
+            extend_count = pos_info.get("tp_extend_count", 0)
+            last_extend_progress = pos_info.get("last_extend_progress", 0)
+
+            # 마지막 확대 이후 또 80% 이상 도달했으면 재확대
+            if tp_progress >= last_extend_progress + 0.8 or extend_count == 0:
                 if side == "long":
-                    new_tp = tp + (tp - entry) * 0.5
+                    new_tp = tp + original_tp_dist * 0.5
                 else:
-                    new_tp = tp - (entry - tp) * 0.5
+                    new_tp = tp - original_tp_dist * 0.5
                 new_tp = self.client.round_price(symbol, new_tp)
-                pos_idx = 1 if side == "long" else 2
                 try:
                     self.client.set_tp_sl(symbol, take_profit=new_tp, position_idx=pos_idx)
+                    old_tp = tp
                     pos_info["tp"] = new_tp
-                    pos_info["tp_extended"] = True
-                    logger.info(f"[{symbol}] TP 확대: {tp:.2f} -> {new_tp:.2f} (진행 {tp_progress:.0%})")
+                    pos_info["tp_extend_count"] = extend_count + 1
+                    pos_info["last_extend_progress"] = tp_progress
+                    logger.info(f"[{symbol}] TP 확대 #{extend_count+1}: "
+                                f"{old_tp:.6f} → {new_tp:.6f} "
+                                f"(진행 {tp_progress:.0%}, 수익 {unrealized_pct:.1%})")
                 except Exception as e:
                     logger.warning(f"[{symbol}] TP 확대 실패: {e}")
+
+        # === Stage 5: 2차 부분 익절 (원래 TP의 200% 도달, 추가 30% 청산) ===
+        if tp_progress >= 2.0 and not pos_info.get("partial_2_done"):
+            logger.info(f"[{symbol}] TP 200% 초과! → 2차 부분 익절 (30%)")
+            self.order_mgr.execute_partial_close(
+                symbol, close_ratio=0.3,
+                reason=f"partial_2 (진행 {tp_progress:.0%}, 수익 {unrealized_pct:.1%})"
+            )
+            pos_info["partial_2_done"] = True
 
     def process_symbol(self, symbol: str):
         """심볼별 시그널 처리"""
