@@ -234,12 +234,13 @@ class TradingBot:
                 pos_info["lowest_price"] = price
 
         # === 시그널 기반 관리 ===
+        is_reverse = False
         if signal_data:
             direction = signal_data["direction"]
             strength = signal_data["strength"]
             atr = signal_data["atr"]
 
-            # 반대 시그널 → 즉시 청산
+            # A) 반대 시그널 → 즉시 시장가 청산
             if direction != 0:
                 is_reverse = (direction == 1 and side == "short") or \
                              (direction == -1 and side == "long")
@@ -248,9 +249,65 @@ class TradingBot:
                     self.order_mgr.execute_exit(symbol, reason="reverse_signal")
                     return
 
-            # 같은 방향 강한 시그널 → SL 조정
+            # B) 같은 방향 강한 시그널 → SL 확장 (여유 확보)
             if direction != 0 and strength >= 0.5 and not is_reverse:
                 self.order_mgr.update_dynamic_sl(symbol, price, atr, strength)
+
+            # C) 모멘텀 소진 감지: 수익 중 + RSI 극단 도달 → 시장가 즉시 익절
+            #    롱: RSI > 80이면 과매수 극단 → 추가 상승 여력 소진
+            #    숏: RSI < 20이면 과매도 극단 → 추가 하락 여력 소진
+            if unrealized_pct > 0.02:  # 수익 2%+ 상태에서만
+                try:
+                    df_check = self.fetch_data(symbol, limit=30)
+                    if not df_check.empty:
+                        from strategy.final_strategy import calc_rsi
+                        rsi_series = calc_rsi(df_check["close"], 14)
+                        current_rsi = rsi_series.iloc[-1]
+                        if not pd.isna(current_rsi):
+                            if side == "long" and current_rsi > 80:
+                                logger.info(f"[{symbol}] 모멘텀 소진! RSI {current_rsi:.0f} (>80) "
+                                            f"수익 {unrealized_pct:.1%} → 시장가 익절")
+                                self.order_mgr.execute_exit(symbol, reason=f"momentum_fade_rsi_{current_rsi:.0f}")
+                                return
+                            elif side == "short" and current_rsi < 20:
+                                logger.info(f"[{symbol}] 모멘텀 소진! RSI {current_rsi:.0f} (<20) "
+                                            f"수익 {unrealized_pct:.1%} → 시장가 익절")
+                                self.order_mgr.execute_exit(symbol, reason=f"momentum_fade_rsi_{current_rsi:.0f}")
+                                return
+                except Exception:
+                    pass
+
+            # D) ATR 수축 감지: 변동성 급감 = 추세 종료 신호 → SL 타이트닝
+            if unrealized_pct > 0.03 and atr > 0:
+                try:
+                    df_atr = self.fetch_data(symbol, limit=50)
+                    if not df_atr.empty and len(df_atr) >= 30:
+                        from strategy.final_strategy import calc_atr as _calc_atr
+                        atr_series = _calc_atr(df_atr, 14)
+                        recent_atr = atr_series.iloc[-1]
+                        avg_atr = atr_series.iloc[-20:].mean()
+                        if not pd.isna(recent_atr) and not pd.isna(avg_atr) and avg_atr > 0:
+                            atr_ratio = recent_atr / avg_atr
+                            if atr_ratio < 0.6:  # ATR이 평균의 60% 미만 = 변동성 급감
+                                # SL을 현재 수익의 85%로 타이트닝
+                                if side == "long":
+                                    tight_sl = entry + (price - entry) * 0.85
+                                    tight_sl = self.client.round_price(symbol, tight_sl)
+                                    if tight_sl > sl and tight_sl > entry:
+                                        self.client.set_tp_sl(symbol, stop_loss=tight_sl, position_idx=pos_idx)
+                                        pos_info["sl"] = tight_sl
+                                        logger.info(f"[{symbol}] ATR 수축! ({atr_ratio:.2f}) "
+                                                    f"SL 타이트닝 → {tight_sl} (수익 85% 보호)")
+                                else:
+                                    tight_sl = entry - (entry - price) * 0.85
+                                    tight_sl = self.client.round_price(symbol, tight_sl)
+                                    if (tight_sl < sl or sl >= entry) and tight_sl < entry:
+                                        self.client.set_tp_sl(symbol, stop_loss=tight_sl, position_idx=pos_idx)
+                                        pos_info["sl"] = tight_sl
+                                        logger.info(f"[{symbol}] ATR 수축! ({atr_ratio:.2f}) "
+                                                    f"SL 타이트닝 → {tight_sl} (수익 85% 보호)")
+                except Exception:
+                    pass
 
         # === Stage 0: 안전장치 ===
         if sl == 0 or (side == "long" and sl <= 0) or (side == "short" and sl <= 0):
@@ -398,25 +455,38 @@ class TradingBot:
             if symbol in self.risk.state.open_positions:
                 self._manage_existing_position(symbol, signal_data=signal_data)
 
-                # 피라미딩: 같은 방향 강한 시그널 (강도 >= 0.7) + 수익 중이면 추가 진입
-                if direction != 0 and strength >= 0.7:
+                # 다단계 피라미딩: 같은 방향 강한 시그널 + 수익 중 → 최대 3회 추가 진입
+                # 1차: 원래 수량의 50%, 2차: 30%, 3차: 20%
+                if direction != 0 and strength >= 0.6:
                     pos_info = self.risk.state.open_positions.get(symbol)
                     if pos_info and pos_info.get("status") != "pending":
                         pos_side = pos_info["side"]
                         signal_side = "long" if direction == 1 else "short"
-                        if pos_side == signal_side and not pos_info.get("pyramided"):
-                            logger.info(
-                                f"[{symbol}] 피라미딩 조건 검토 | "
-                                f"강도: {strength:.2f} | 방향: {signal_side}"
-                            )
-                            self.order_mgr.execute_pyramid(
-                                symbol=symbol,
-                                side=pos_side,
-                                current_price=price,
-                                atr=atr,
-                                signal_strength=strength,
-                                leverage=leverage,
-                            )
+                        pyramid_count = pos_info.get("pyramid_count", 0)
+                        max_pyramids = 3
+
+                        if pos_side == signal_side and pyramid_count < max_pyramids:
+                            # 수익률 체크: 피라미딩은 수익 중에만
+                            entry_p = pos_info["entry_price"]
+                            if (side == "long" and price > entry_p) or \
+                               (side == "short" and price < entry_p):
+                                # 강도 요구: 피라미딩 횟수 늘수록 더 강한 시그널 필요
+                                min_strength = 0.6 + pyramid_count * 0.1
+                                if strength >= min_strength:
+                                    logger.info(
+                                        f"[{symbol}] 피라미딩 #{pyramid_count+1}/{max_pyramids} | "
+                                        f"강도: {strength:.2f} (최소 {min_strength:.1f}) | "
+                                        f"방향: {signal_side}"
+                                    )
+                                    self.order_mgr.execute_pyramid(
+                                        symbol=symbol,
+                                        side=pos_side,
+                                        current_price=price,
+                                        atr=atr,
+                                        signal_strength=strength,
+                                        leverage=leverage,
+                                    )
+                                    pos_info["pyramid_count"] = pyramid_count + 1
                 return
 
             # 4. 신규 진입 (전략 심볼에만 적용)

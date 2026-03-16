@@ -26,7 +26,7 @@ OPTIMAL_PARAMS = {
     # TREND-FOLLOWING mode (ADX >= 25)
     "tf_tp_atr_mult": 4.0,       # Wide TP for maximum returns (R:R 2:1)
     "tf_sl_atr_mult": 2.0,       # Wide SL to survive pullbacks in trends
-    "tf_leverage": 15,            # Lower leverage (wider SL)
+    "tf_leverage": 20,            # Higher leverage for trend-following
     "tf_cooldown": 6,             # 1.5 hours
     "tf_min_score": 2.0,
     "tf_use_trailing": True,
@@ -34,7 +34,7 @@ OPTIMAL_PARAMS = {
     # MEAN-REVERSION mode (ADX < 20)
     "mr_tp_atr_mult": 1.5,       # Tight TP for quick scalps
     "mr_sl_atr_mult": 1.0,       # Tight SL
-    "mr_leverage": 25,            # Higher leverage (tight SL)
+    "mr_leverage": 30,            # Aggressive leverage for ranging (tight SL)
     "mr_cooldown": 4,             # 1 hour
     "mr_min_score": 1.5,
     "mr_rsi_oversold": 30,
@@ -59,7 +59,7 @@ OPTIMAL_PARAMS = {
 }
 
 ENGINE_CONFIG = {
-    "risk_per_trade": 0.002,
+    "risk_per_trade": 0.0018,     # Slightly reduced for MDD control
     "use_trailing_stop": True,   # Enabled for trend mode
     "trailing_activation_atr": 2.0,
     "trailing_distance_atr": 2.0,

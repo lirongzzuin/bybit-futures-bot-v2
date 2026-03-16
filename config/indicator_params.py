@@ -46,9 +46,9 @@ VOLUME = {
 TRADING = {
     "exchange": "bybit",
     "default_leverage": 20,
-    "max_leverage": 25,
+    "max_leverage": 30,
     "default_timeframe": "15",        # 15-minute candles (4H via resampling)
-    "risk_per_trade": 0.002,          # 0.2% x 20x = ~4% actual risk
+    "risk_per_trade": 0.0018,         # 0.18% x 20x = ~3.6% actual risk
     "max_open_positions": 5,
     "max_daily_loss": 0.15,           # 15% daily max loss (aggressive)
 }

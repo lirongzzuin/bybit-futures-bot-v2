@@ -463,8 +463,8 @@ class OrderManager:
         if not pos_info or pos_info.get("status") == "pending":
             return None
 
-        # 이미 피라미딩 했으면 스킵
-        if pos_info.get("pyramided"):
+        # 피라미딩 최대 3회
+        if pos_info.get("pyramid_count", 0) >= 3:
             return None
 
         entry = pos_info["entry_price"]
@@ -477,12 +477,19 @@ class OrderManager:
         else:
             unrealized_pct = (entry - current_price) / entry
 
-        if unrealized_pct < 0.02:
-            logger.debug(f"[{symbol}] 피라미딩 조건 미달: 수익 {unrealized_pct:.1%} < 2%")
+        if unrealized_pct < 0.01:
+            logger.debug(f"[{symbol}] 피라미딩 조건 미달: 수익 {unrealized_pct:.1%} < 1%")
             return None
 
-        # 추가 수량: 원래 포지션의 50%
-        add_qty = original_qty * 0.5
+        # 다단계 피라미딩: 횟수에 따라 수량 감소
+        pyramid_count = pos_info.get("pyramid_count", 0)
+        if pyramid_count == 0:
+            add_ratio = 0.5  # 1차: 원래의 50%
+        elif pyramid_count == 1:
+            add_ratio = 0.3  # 2차: 30%
+        else:
+            add_ratio = 0.2  # 3차: 20%
+        add_qty = original_qty * add_ratio
 
         # 강도 >= 0.8이면 레버리지 1단계 상승
         new_lev = self.risk.get_effective_leverage(leverage)
