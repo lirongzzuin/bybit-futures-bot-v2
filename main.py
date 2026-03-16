@@ -468,8 +468,8 @@ class TradingBot:
                         if pos_side == signal_side and pyramid_count < max_pyramids:
                             # 수익률 체크: 피라미딩은 수익 중에만
                             entry_p = pos_info["entry_price"]
-                            if (side == "long" and price > entry_p) or \
-                               (side == "short" and price < entry_p):
+                            if (pos_side == "long" and price > entry_p) or \
+                               (pos_side == "short" and price < entry_p):
                                 # 강도 요구: 피라미딩 횟수 늘수록 더 강한 시그널 필요
                                 min_strength = 0.6 + pyramid_count * 0.1
                                 if strength >= min_strength:
