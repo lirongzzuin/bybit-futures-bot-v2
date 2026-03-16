@@ -95,17 +95,19 @@ class RiskManager:
         leverage = leverage or TRADING["default_leverage"]
         leverage = min(leverage, TRADING["max_leverage"])
 
-        base_risk_pct = TRADING["risk_per_trade"]
-
-        # 잔고 규모별 리스크 자동 조정 (소액일수록 적극적, 대액일수록 보수적)
-        if balance < 200:
-            risk_pct = max(base_risk_pct, 0.02)     # $200 미만: 최소 2% (최소주문금액 충족)
-        elif balance < 1000:
-            risk_pct = max(base_risk_pct, 0.01)     # $1,000 미만: 최소 1%
+        # 레버리지 고려 적응형 리스크 — 실질 리스크(risk × leverage) 기준
+        # 소액: 실질 리스크 높게 (공격적 성장)
+        # 대액: 실질 리스크 낮게 (자본 보호)
+        if balance < 500:
+            target_actual = 0.12    # 소액: 실질 12% (공격적)
+        elif balance < 2000:
+            target_actual = 0.08   # 실질 8%
         elif balance < 10000:
-            risk_pct = base_risk_pct                 # $10,000 미만: 설정값 그대로
+            target_actual = 0.06   # 실질 6%
         else:
-            risk_pct = min(base_risk_pct, 0.005)    # $10,000+: 최대 0.5% (자본 보호)
+            target_actual = 0.04   # 대액: 실질 4% (안정적)
+
+        risk_pct = target_actual / leverage  # 레버리지 역산
 
         # 연속 손실 시 사이즈 축소
         if self.state.consecutive_losses >= 3:

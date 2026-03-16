@@ -48,7 +48,7 @@ TRADING = {
     "default_leverage": 20,
     "max_leverage": 30,
     "default_timeframe": "15",        # 15-minute candles (4H via resampling)
-    "risk_per_trade": 0.01,           # 1% — 소액 계좌에서도 최소주문금액 충족
+    "risk_per_trade": 0.03,           # 3% base (잔고별 자동 조정)
     "max_open_positions": 5,
     "max_daily_loss": 0.15,           # 15% daily max loss (aggressive)
 }
