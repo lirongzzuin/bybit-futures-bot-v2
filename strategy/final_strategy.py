@@ -59,7 +59,7 @@ OPTIMAL_PARAMS = {
 }
 
 ENGINE_CONFIG = {
-    "risk_per_trade": 0.0018,     # Slightly reduced for MDD control
+    "risk_per_trade": 0.01,       # 1% — 소액 계좌에서 의미있는 수량 확보
     "use_trailing_stop": True,   # Enabled for trend mode
     "trailing_activation_atr": 2.0,
     "trailing_distance_atr": 2.0,

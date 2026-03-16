@@ -253,27 +253,41 @@ class TradingBot:
             if direction != 0 and strength >= 0.5 and not is_reverse:
                 self.order_mgr.update_dynamic_sl(symbol, price, atr, strength)
 
-            # C) 모멘텀 소진 감지: 수익 중 + RSI 극단 도달 → 시장가 즉시 익절
-            #    롱: RSI > 80이면 과매수 극단 → 추가 상승 여력 소진
-            #    숏: RSI < 20이면 과매도 극단 → 추가 하락 여력 소진
-            if unrealized_pct > 0.02:  # 수익 2%+ 상태에서만
+            # C) 모멘텀 반전 감지: 수익 중 + RSI 극단에서 '꺾이기 시작'할 때만 청산
+            #    단순히 RSI > 80이면 청산하지 않음 (RSI 80 이상에서 계속 오를 수 있음)
+            #    RSI > 75 AND RSI가 직전 2봉 대비 하락 시작 → 상승 모멘텀 반전 확인
+            #    RSI < 25 AND RSI가 직전 2봉 대비 상승 시작 → 하락 모멘텀 반전 확인
+            if unrealized_pct > 0.02:
                 try:
                     df_check = self.fetch_data(symbol, limit=30)
-                    if not df_check.empty:
+                    if not df_check.empty and len(df_check) >= 5:
                         from strategy.final_strategy import calc_rsi
                         rsi_series = calc_rsi(df_check["close"], 14)
-                        current_rsi = rsi_series.iloc[-1]
-                        if not pd.isna(current_rsi):
-                            if side == "long" and current_rsi > 80:
-                                logger.info(f"[{symbol}] 모멘텀 소진! RSI {current_rsi:.0f} (>80) "
-                                            f"수익 {unrealized_pct:.1%} → 시장가 익절")
-                                self.order_mgr.execute_exit(symbol, reason=f"momentum_fade_rsi_{current_rsi:.0f}")
-                                return
-                            elif side == "short" and current_rsi < 20:
-                                logger.info(f"[{symbol}] 모멘텀 소진! RSI {current_rsi:.0f} (<20) "
-                                            f"수익 {unrealized_pct:.1%} → 시장가 익절")
-                                self.order_mgr.execute_exit(symbol, reason=f"momentum_fade_rsi_{current_rsi:.0f}")
-                                return
+                        if len(rsi_series) >= 3:
+                            r_now = rsi_series.iloc[-1]
+                            r_prev = rsi_series.iloc[-2]
+                            r_prev2 = rsi_series.iloc[-3]
+                            if not pd.isna(r_now) and not pd.isna(r_prev) and not pd.isna(r_prev2):
+                                # 롱: RSI > 75 + 2봉 연속 하락 (고점에서 꺾임)
+                                if (side == "long" and r_now > 75 and
+                                        r_now < r_prev and r_prev < r_prev2):
+                                    logger.info(
+                                        f"[{symbol}] RSI 반전 감지! "
+                                        f"{r_prev2:.0f}→{r_prev:.0f}→{r_now:.0f} (하락 전환) "
+                                        f"수익 {unrealized_pct:.1%} → 시장가 익절")
+                                    self.order_mgr.execute_exit(
+                                        symbol, reason=f"rsi_reversal_{r_now:.0f}")
+                                    return
+                                # 숏: RSI < 25 + 2봉 연속 상승 (저점에서 꺾임)
+                                elif (side == "short" and r_now < 25 and
+                                        r_now > r_prev and r_prev > r_prev2):
+                                    logger.info(
+                                        f"[{symbol}] RSI 반전 감지! "
+                                        f"{r_prev2:.0f}→{r_prev:.0f}→{r_now:.0f} (상승 전환) "
+                                        f"수익 {unrealized_pct:.1%} → 시장가 익절")
+                                    self.order_mgr.execute_exit(
+                                        symbol, reason=f"rsi_reversal_{r_now:.0f}")
+                                    return
                 except Exception:
                     pass
 
