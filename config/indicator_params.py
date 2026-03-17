@@ -53,6 +53,21 @@ TRADING = {
     "max_daily_loss": 0.15,           # 15% daily max loss (aggressive)
 }
 
+# === 일봉 전환 보호 (Daily Candle Transition Protection) ===
+# 매일 0:00 UTC (KST 09:00) 일봉 시작 전후로 변동성 급등 → 포지션 보호
+DAILY_CANDLE_PROTECTION = {
+    "enabled": True,
+    # 보호 시간대 (UTC 기준): 23:45 ~ 00:15 = KST 08:45 ~ 09:15
+    "pre_candle_minutes": 15,          # 일봉 전환 15분 전부터
+    "post_candle_minutes": 15,         # 일봉 전환 15분 후까지
+    # 보호 시간대 행동
+    "block_new_entries": True,         # 신규 진입 차단
+    "tighten_sl_ratio": 0.7,          # 보유 포지션 SL을 수익의 70%로 타이트닝
+    "reduce_leverage_factor": 0.5,     # 보호 구간 직전 진입 시 레버리지 50% 감소
+    # 수익 보호: 일봉 전환 전에 수익 중인 포지션은 SL을 최소 본전 이상으로
+    "protect_profitable_positions": True,
+}
+
 # === Fee Config (Bybit USDT perpetual) ===
 FEES = {
     "maker": 0.0002,                  # Limit: 0.02%

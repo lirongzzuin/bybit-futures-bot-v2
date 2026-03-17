@@ -9,6 +9,7 @@ Backtest Engine v4.0
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from strategy.position_manager import Position, ExitCondition, calc_atr
@@ -245,8 +246,10 @@ class BacktestEngine:
 
                 leverage = sig_lev if cfg.use_signal_leverage else cfg.leverage
 
-                # Risk check
-                can_open, msg = risk_mgr.can_open_position(symbol)
+                # Risk check (pass bar timestamp for daily candle simulation)
+                bar_ts = pd.Timestamp(row["timestamp"])
+                bar_dt = bar_ts.to_pydatetime().replace(tzinfo=timezone.utc)
+                can_open, msg = risk_mgr.can_open_position(symbol, simulated_time=bar_dt)
                 if not can_open:
                     equity_curve.append(capital)
                     continue

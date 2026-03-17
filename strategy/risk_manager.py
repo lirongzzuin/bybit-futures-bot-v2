@@ -13,10 +13,10 @@
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Optional
 
-from config.indicator_params import TRADING
+from config.indicator_params import TRADING, DAILY_CANDLE_PROTECTION
 from utils.logger import setup_logger
 
 logger = setup_logger("risk")
@@ -55,8 +55,58 @@ class RiskManager:
             self.state.daily_trade_halted = False
             logger.info(f"일일 리셋 — 시작 잔고: ${self.state.current_balance:.2f}")
 
-    def can_open_position(self, symbol: str) -> tuple[bool, str]:
+    def is_daily_candle_transition(self, simulated_time: datetime = None) -> bool:
+        """
+        일봉 전환 시간대(0:00 UTC = 9:00 KST) 전후인지 확인
+
+        매일 9시 KST에 일봉이 시작되면서 급격한 변동성이 발생하는 패턴:
+        - 대량 청산(liquidation cascade)
+        - 일봉 시가 기준 스톱헌팅
+        - 펀딩비 정산(8시간 간격, 9시도 정산 시점)
+
+        이 시간대에는 신규 진입을 차단하고 보유 포지션을 보호해야 함
+        """
+        if not DAILY_CANDLE_PROTECTION.get("enabled", False):
+            return False
+
+        now = simulated_time or datetime.now(timezone.utc)
+        current_minutes = now.hour * 60 + now.minute  # 0~1439
+
+        pre = DAILY_CANDLE_PROTECTION["pre_candle_minutes"]
+        post = DAILY_CANDLE_PROTECTION["post_candle_minutes"]
+
+        # 0:00 UTC 기준 보호 구간: (24:00 - pre) ~ (0:00 + post)
+        # = (1440 - pre) ~ post 분
+        start = (1440 - pre) % 1440  # 예: 15분 전 = 23:45 = 1425분
+        end = post                    # 예: 15분 후 = 00:15 = 15분
+
+        if start > end:
+            # 자정을 걸치는 경우 (23:45 ~ 00:15)
+            return current_minutes >= start or current_minutes <= end
+        else:
+            return start <= current_minutes <= end
+
+    def is_pre_daily_candle(self, simulated_time: datetime = None) -> bool:
+        """일봉 전환 직전인지 (SL 타이트닝 시작 시점)"""
+        if not DAILY_CANDLE_PROTECTION.get("enabled", False):
+            return False
+
+        now = simulated_time or datetime.now(timezone.utc)
+        current_minutes = now.hour * 60 + now.minute
+
+        pre = DAILY_CANDLE_PROTECTION["pre_candle_minutes"]
+        # 일봉 전환 30분 전부터 사전 보호 시작 (SL 타이트닝)
+        extended_pre = pre + 15  # 추가 15분 여유
+        start = (1440 - extended_pre) % 1440
+
+        return current_minutes >= start or current_minutes <= 0
+
+    def can_open_position(self, symbol: str, simulated_time: datetime = None) -> tuple[bool, str]:
         """새 포지션 개설 가능 여부 확인"""
+        # 0. 일봉 전환 시간대 진입 차단
+        if DAILY_CANDLE_PROTECTION.get("block_new_entries", True) and self.is_daily_candle_transition(simulated_time):
+            return False, "일봉 전환 시간대 (KST 08:45~09:15) — 신규 진입 차단"
+
         # 1. 일일 손실 한도 체크
         if self.state.daily_trade_halted:
             return False, "일일 최대 손실 도달 — 매매 중단"

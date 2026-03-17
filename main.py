@@ -445,6 +445,87 @@ class TradingBot:
             )
             pos_info["partial_2_done"] = True
 
+    def _protect_position_for_daily_candle(self, symbol: str, pos_info: dict,
+                                              price: float, entry: float,
+                                              side: str, current_sl: float,
+                                              pnl_pct: float):
+        """
+        일봉 전환(KST 09:00) 전후 포지션 보호
+
+        매일 9시 KST에 발생하는 패턴:
+        - 일봉 시가 기준 스톱헌팅 (롱/숏 양방향 급등락)
+        - 대량 청산 캐스케이드
+        - 펀딩비 정산
+
+        보호 전략:
+        1. 수익 중인 포지션: SL을 수익의 70% 이상으로 타이트닝 → 수익 보호
+        2. 손실 중인 포지션: SL을 더 타이트하게 (추가 손실 방지)
+        3. 본전 근처: 본전 SL 강제 설정
+        """
+        from config.indicator_params import DAILY_CANDLE_PROTECTION
+        pos_idx = 1 if side == "long" else 2
+        protect_ratio = DAILY_CANDLE_PROTECTION.get("tighten_sl_ratio", 0.7)
+
+        try:
+            if pnl_pct > 0.5:
+                # 수익 중: 수익의 70% 보호 (기존 SL보다 타이트해야만 업데이트)
+                if side == "long":
+                    protected_sl = entry + (price - entry) * protect_ratio
+                    protected_sl = self.client.round_price(symbol, protected_sl)
+                    if protected_sl > current_sl and protected_sl > entry:
+                        self.client.set_tp_sl(symbol, stop_loss=protected_sl, position_idx=pos_idx)
+                        pos_info["sl"] = protected_sl
+                        pos_info["daily_candle_protected"] = True
+                        logger.info(f"[{symbol}] ⚡ 일봉전환 보호: SL {current_sl} → {protected_sl} "
+                                    f"(수익 {pnl_pct:.1f}%의 {protect_ratio:.0%} 보호)")
+                else:
+                    protected_sl = entry - (entry - price) * protect_ratio
+                    protected_sl = self.client.round_price(symbol, protected_sl)
+                    if (protected_sl < current_sl or current_sl >= entry) and protected_sl < entry:
+                        self.client.set_tp_sl(symbol, stop_loss=protected_sl, position_idx=pos_idx)
+                        pos_info["sl"] = protected_sl
+                        pos_info["daily_candle_protected"] = True
+                        logger.info(f"[{symbol}] ⚡ 일봉전환 보호: SL {current_sl} → {protected_sl} "
+                                    f"(수익 {pnl_pct:.1f}%의 {protect_ratio:.0%} 보호)")
+
+            elif pnl_pct > -0.5:
+                # 본전 근처 (-0.5% ~ +0.5%): 본전 SL 강제
+                be_sl = self.client.round_price(symbol, entry)
+                need_update = False
+                if side == "long" and (current_sl < entry or current_sl == 0):
+                    need_update = True
+                elif side == "short" and (current_sl > entry or current_sl == 0):
+                    need_update = True
+
+                if need_update:
+                    self.client.set_tp_sl(symbol, stop_loss=be_sl, position_idx=pos_idx)
+                    pos_info["sl"] = be_sl
+                    pos_info["daily_candle_protected"] = True
+                    logger.info(f"[{symbol}] ⚡ 일봉전환 보호: 본전 SL 설정 ({be_sl}) "
+                                f"(PnL {pnl_pct:.1f}%)")
+
+            else:
+                # 손실 중: 긴급 SL 타이트닝 (-5% → -4%로 줄이기)
+                if side == "long":
+                    tight_sl = self.client.round_price(symbol, entry * (1 - 0.04))
+                    if tight_sl > current_sl or current_sl == 0:
+                        self.client.set_tp_sl(symbol, stop_loss=tight_sl, position_idx=pos_idx)
+                        pos_info["sl"] = tight_sl
+                        pos_info["daily_candle_protected"] = True
+                        logger.info(f"[{symbol}] ⚡ 일봉전환 보호: 손실 SL 타이트닝 → {tight_sl} "
+                                    f"(PnL {pnl_pct:.1f}%)")
+                else:
+                    tight_sl = self.client.round_price(symbol, entry * (1 + 0.04))
+                    if (tight_sl < current_sl or current_sl == 0):
+                        self.client.set_tp_sl(symbol, stop_loss=tight_sl, position_idx=pos_idx)
+                        pos_info["sl"] = tight_sl
+                        pos_info["daily_candle_protected"] = True
+                        logger.info(f"[{symbol}] ⚡ 일봉전환 보호: 손실 SL 타이트닝 → {tight_sl} "
+                                    f"(PnL {pnl_pct:.1f}%)")
+
+        except Exception as e:
+            logger.error(f"[{symbol}] 일봉전환 보호 실패: {e}")
+
     def process_symbol(self, symbol: str):
         """심볼별 시그널 처리"""
         try:
@@ -471,7 +552,8 @@ class TradingBot:
 
                 # 다단계 피라미딩: 같은 방향 강한 시그널 + 수익 중 → 최대 3회 추가 진입
                 # 1차: 원래 수량의 50%, 2차: 30%, 3차: 20%
-                if direction != 0 and strength >= 0.6:
+                # ★ 일봉 전환 시간대에는 피라미딩도 차단
+                if direction != 0 and strength >= 0.6 and not self.risk.is_daily_candle_transition():
                     pos_info = self.risk.state.open_positions.get(symbol)
                     if pos_info and pos_info.get("status") != "pending":
                         pos_side = pos_info["side"]
@@ -674,6 +756,16 @@ class TradingBot:
             self.safe_mode = True
             return
 
+        # ★ 일봉 전환 시간대 벗어나면 보호 플래그 리셋
+        if not self.risk.is_daily_candle_transition():
+            for sym, pos_info in self.risk.state.open_positions.items():
+                if pos_info.get("daily_candle_protected"):
+                    pos_info["daily_candle_protected"] = False
+
+        # ★ 일봉 전환 시간대 로그
+        if self.risk.is_daily_candle_transition():
+            logger.info("⚡ 일봉 전환 보호 구간 — 신규 진입 차단, 포지션 SL 타이트닝 활성")
+
         # 전략 심볼 갱신 (매시 정각에만, 15분마다 갱신하면 API 부하)
         if now.minute < 5:
             self.strategy_symbols = self._load_strategy_symbols()
@@ -709,6 +801,10 @@ class TradingBot:
             # 서버사이드 TP/SL 체결 감지
             self._check_position_closures()
 
+            # ★ 일봉 전환 보호: KST 09:00 전후 SL 타이트닝
+            is_candle_transition = self.risk.is_daily_candle_transition()
+            is_pre_candle = self.risk.is_pre_daily_candle()
+
             # 보유 포지션 실시간 관리 (트레일링 SL, 부분 익절, TP 확대)
             active_positions = {
                 s: p for s, p in self.risk.state.open_positions.items()
@@ -738,13 +834,18 @@ class TradingBot:
                             f"SL={sl} TP={tp}"
                         )
 
+                        # ★ 일봉 전환 시간대 SL 타이트닝
+                        if (is_candle_transition or is_pre_candle) and not pos_info.get("daily_candle_protected"):
+                            self._protect_position_for_daily_candle(symbol, pos_info, price, entry, side, sl, pnl_pct)
+
                         # 포지션 관리 실행
                         self._manage_existing_position(symbol)
 
                     except Exception as e:
                         logger.error(f"[{symbol}] 실시간 관리 에러: {e}")
 
-                logger.info(f"[모니터] {len(active_positions)}개 포지션 | " +
+                transition_tag = " ⚡일봉전환보호" if is_candle_transition else ""
+                logger.info(f"[모니터] {len(active_positions)}개 포지션{transition_tag} | " +
                             " | ".join(summaries))
             else:
                 # 포지션 없을 때는 5분마다만 로그
