@@ -199,9 +199,10 @@ class BacktestEngine:
                     # Leverage amplifies PnL (both gains and losses)
                     raw_pnl *= position.leverage
 
-                    # Fees (on notional value)
+                    # Fees: entry uses config rate, SL exits use taker (always market)
                     entry_fee = position.entry_price * position.quantity * cfg.fee_rate
-                    exit_fee = exit_price * position.quantity * cfg.fee_rate
+                    exit_fee_rate = 0.00055 if reason == "stop_loss" else cfg.fee_rate
+                    exit_fee = exit_price * position.quantity * exit_fee_rate
                     total_fee = entry_fee + exit_fee
                     net_pnl = raw_pnl - total_fee
 

@@ -56,11 +56,11 @@ def run_backtest_period(symbol: str, df, period_name: str,
     if config is None:
         config = BacktestConfig(
             initial_capital=10000.0,
-            fee_rate=0.0002,           # Maker fee only (limit orders)
+            fee_rate=0.0002,           # Maker entry (limit orders)
             slippage_rate=0.0001,      # Minimal slippage (limit orders)
-            leverage=20,               # Default 20x (overridden by signal)
+            leverage=15,               # Default 15x (overridden by signal)
             exit_type="fixed_tp_sl",   # Fixed TP/SL (no trailing)
-            max_bars=0,
+            max_bars=96,               # 24-hour time exit
             use_signal_leverage=True,
             atr_trailing_mult=2.0,
         )

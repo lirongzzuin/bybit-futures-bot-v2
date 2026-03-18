@@ -153,6 +153,8 @@ class OrderManager:
         signal_grade: str = "",
         strategy: str = "",
         signal_strength: float = 0.5,
+        tp_price: float = 0,
+        sl_price: float = 0,
     ) -> Optional[dict]:
         """진입 주문 실행"""
         # 리스크 체크 (lock 포함)
@@ -170,11 +172,15 @@ class OrderManager:
         lev = self.risk.get_effective_leverage(leverage)
         self.client.set_leverage(symbol, lev)
 
-        # TP/SL 계산
+        # TP/SL: use signal-provided values if available, fallback to legacy calc
         order_side = "Buy" if side == "long" else "Sell"
-        tp, sl = ExitCondition.fixed_tp_sl(entry_price, side, atr, tp_sl_ratio)
-        tp = self.client.round_price(symbol, tp)
-        sl = self.client.round_price(symbol, sl)
+        if tp_price > 0 and sl_price > 0:
+            tp = self.client.round_price(symbol, tp_price)
+            sl = self.client.round_price(symbol, sl_price)
+        else:
+            tp, sl = ExitCondition.fixed_tp_sl(entry_price, side, atr, tp_sl_ratio)
+            tp = self.client.round_price(symbol, tp)
+            sl = self.client.round_price(symbol, sl)
 
         # 시그널 강도 기반 비중 조절 (v3.0: 더 보수적)
         if signal_strength >= 0.8:

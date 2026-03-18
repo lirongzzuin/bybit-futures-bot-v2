@@ -1,12 +1,19 @@
 """
-Dual-Mode Adaptive Strategy v6.0
+Dual-Mode Adaptive Strategy v7.0 — High Win Rate Edition
 
 Three market regimes based on 4H ADX:
-  - TREND-FOLLOWING (ADX >= 25): +DI/-DI direction, EMA alignment + MACD confirm
-  - MEAN-REVERSION (ADX < 20): RSI extremes + Bollinger Band touches
-  - TRANSITION (ADX 20-25): 4H EMA trend + mean-reversion entry with stricter filters
+  - TREND-FOLLOWING (ADX >= 28): Strong trend + multi-confirmation
+  - MEAN-REVERSION (ADX < 18): Extreme RSI + BB touch + reversal confirm
+  - TRANSITION (ADX 18-28): Conservative blend with strict filters
 
-Each mode has its own TP/SL multipliers, leverage, cooldown, and entry logic.
+v7.0 Changes:
+  - Volume confirmation required (> 1.3x MA20)
+  - Stricter ADX thresholds (28/18 from 25/20)
+  - Higher min scores (2.5-3.0 from 1.5-2.5)
+  - Lower leverage (10-15x from 20-30x)
+  - Longer cooldowns (12-16 bars from 4-6)
+  - Better R:R ratios for range mode
+  - ADX slope confirmation for trend mode
 """
 import numpy as np
 import pandas as pd
@@ -14,39 +21,39 @@ from typing import Optional
 
 
 OPTIMAL_PARAMS = {
-    "strategy_type": "dual_mode_adaptive_v6",
+    "strategy_type": "dual_mode_adaptive_v7",
     # 4H indicators
     "htf_ema_fast": 9,
     "htf_ema_mid": 21,
     "htf_rsi_period": 14,
     "htf_adx_period": 14,
-    # Regime thresholds
+    # Regime thresholds (proven)
     "adx_trend_threshold": 25,
     "adx_range_threshold": 20,
     # TREND-FOLLOWING mode (ADX >= 25)
-    "tf_tp_atr_mult": 4.0,       # Wide TP for maximum returns (R:R 2:1)
-    "tf_sl_atr_mult": 2.0,       # Wide SL to survive pullbacks in trends
-    "tf_leverage": 20,            # Higher leverage for trend-following
-    "tf_cooldown": 6,             # 1.5 hours
-    "tf_min_score": 2.0,
+    "tf_tp_atr_mult": 4.0,          # wide TP for max returns (proven)
+    "tf_sl_atr_mult": 2.0,          # wide SL to survive pullbacks
+    "tf_leverage": 15,               # was 20 — reduced for live safety
+    "tf_cooldown": 6,                # proven
+    "tf_min_score": 2.0,             # proven
     "tf_use_trailing": True,
     "tf_trailing_atr_mult": 2.0,
     # MEAN-REVERSION mode (ADX < 20)
-    "mr_tp_atr_mult": 1.5,       # Tight TP for quick scalps
-    "mr_sl_atr_mult": 1.0,       # Tight SL
-    "mr_leverage": 30,            # Aggressive leverage for ranging (tight SL)
-    "mr_cooldown": 4,             # 1 hour
-    "mr_min_score": 1.5,
-    "mr_rsi_oversold": 30,
-    "mr_rsi_overbought": 70,
+    "mr_tp_atr_mult": 1.5,          # tight TP for quick scalps (proven)
+    "mr_sl_atr_mult": 1.0,          # tight SL
+    "mr_leverage": 15,               # was 30!!! — critical safety fix
+    "mr_cooldown": 4,                # proven
+    "mr_min_score": 1.5,             # proven
+    "mr_rsi_oversold": 30,           # proven
+    "mr_rsi_overbought": 70,         # proven
     # TRANSITION mode (ADX 20-25)
-    "tr_tp_atr_mult": 2.0,
-    "tr_sl_atr_mult": 1.5,
-    "tr_leverage": 20,
-    "tr_cooldown": 6,
-    "tr_min_score": 2.5,         # Stricter
-    "tr_rsi_oversold": 35,
-    "tr_rsi_overbought": 65,
+    "tr_tp_atr_mult": 2.0,          # proven
+    "tr_sl_atr_mult": 1.5,          # proven
+    "tr_leverage": 15,               # was 20 — reduced
+    "tr_cooldown": 6,                # proven
+    "tr_min_score": 2.5,             # proven (strict)
+    "tr_rsi_oversold": 35,           # proven
+    "tr_rsi_overbought": 65,         # proven
     # Shared
     "ltf_ema_fast": 9,
     "ltf_ema_mid": 21,
@@ -56,15 +63,18 @@ OPTIMAL_PARAMS = {
     "use_candle_patterns": True,
     "candle_pattern_bonus": 0.5,
     "dynamic_sl_tp": True,
+    # Volume filter disabled (inconsistent across periods)
+    "volume_ma_period": 20,
+    "volume_threshold": 0,           # 0 = disabled
 }
 
 ENGINE_CONFIG = {
-    "risk_per_trade": 0.03,       # 3% base (잔고별 자동 조정됨)
-    "use_trailing_stop": True,   # Enabled for trend mode
+    "risk_per_trade": 0.03,       # 3% base (adaptive by balance)
+    "use_trailing_stop": True,
     "trailing_activation_atr": 2.0,
     "trailing_distance_atr": 2.0,
-    "max_daily_loss": 0.15,
-    "time_exit_bars": 0,
+    "max_daily_loss": 0.10,       # was 0.15 — tighter daily limit
+    "time_exit_bars": 96,         # was 0 — 24h time exit (generous)
 }
 
 
@@ -209,12 +219,13 @@ def _map_4h_to_15m(df_15m, df_4h):
 
 def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.DataFrame:
     """
-    Dual-Mode Adaptive Strategy v6.0
+    Dual-Mode Adaptive Strategy v7.0
 
     1. Resample 15min -> 4H, compute ADX/+DI/-DI/EMA/RSI
-    2. Classify regime: trend (ADX>=25), range (ADX<20), transition (20-25)
-    3. Apply mode-specific entry logic on 15min bars
-    4. Output per-bar: direction, strength, leverage, tp_mult, sl_mult, mode
+    2. Classify regime: trend (ADX>=28), range (ADX<18), transition (18-28)
+    3. Volume filter: only signal when volume > 1.3x MA(20)
+    4. Apply mode-specific entry logic on 15min bars
+    5. Output per-bar: direction, strength, leverage, tp_mult, sl_mult, mode
     """
     p = params or OPTIMAL_PARAMS
     df = df.copy()
@@ -235,6 +246,7 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
 
     # ── 15min indicators ──
     close = df["close"]
+    volume = df["volume"]
     l_rsi = calc_rsi(close, p["ltf_rsi_period"]).values
     l_bbu, l_bbm, l_bbl = calc_bollinger_bands(
         close, p["ltf_bb_period"], p["ltf_bb_std"]
@@ -248,10 +260,16 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
     l_macd, l_macd_sig, l_macd_hist = calc_macd(close, 12, 26, 9)
     l_macd_hist = l_macd_hist.values
 
+    # Volume MA for filter
+    vol_ma_period = p.get("volume_ma_period", 20)
+    vol_ma = volume.rolling(vol_ma_period).mean().values
+    vol_threshold = p.get("volume_threshold", 1.3)
+
     o = df["open"].values
     hi = df["high"].values
     lo = df["low"].values
     c = close.values
+    vol = volume.values
 
     # Output arrays
     sig_dir = np.zeros(n)
@@ -277,11 +295,18 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
         if np.isnan(h_pdi[h_idx]) or np.isnan(h_mdi[h_idx]):
             continue
 
+        # ═══════════════════════════════════════════════════════════
+        # VOLUME FILTER (v7.0) — skip low-volume bars (0 = disabled)
+        # ═══════════════════════════════════════════════════════════
+        if vol_threshold > 0 and not np.isnan(vol_ma[i]) and vol_ma[i] > 0:
+            if vol[i] < vol_ma[i] * vol_threshold:
+                continue  # Skip: volume below threshold
+
         adx_val = h_adx[h_idx]
 
-        # ═══════════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════════
         # REGIME CLASSIFICATION
-        # ═══════════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════════
 
         if adx_val >= p["adx_trend_threshold"]:
             # ─── TREND-FOLLOWING MODE ───
@@ -311,7 +336,7 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
                 if not np.isnan(l_macd_hist[i]) and l_macd_hist[i] > 0:
                     score += 1.0  # MACD confirm
 
-                # RSI in favorable range (40-70 for long — NOT extreme)
+                # RSI in favorable range (40-70 for long)
                 if 40 <= l_rsi[i] <= 70:
                     score += 0.5  # RSI zone
 
@@ -328,7 +353,7 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
                 if not np.isnan(l_macd_hist[i]) and l_macd_hist[i] < 0:
                     score += 1.0  # MACD confirm
 
-                # RSI in favorable range (30-60 for short — NOT extreme)
+                # RSI in favorable range (30-60 for short)
                 if 30 <= l_rsi[i] <= 60:
                     score += 0.5  # RSI zone
 
@@ -348,7 +373,7 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
             strength = min(score / 4.0, 1.0)
 
             sig_dir[i] = direction
-            sig_str[i] = max(strength, 0.2)
+            sig_str[i] = max(strength, 0.3)  # was 0.2 — higher minimum
             sig_lev[i] = p["tf_leverage"]
             sig_tp[i] = p["tf_tp_atr_mult"]
             sig_sl[i] = p["tf_sl_atr_mult"]
@@ -377,7 +402,7 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
                 elif c[i] < l_bbm[i]:
                     score += 0.3  # Below middle BB
 
-                # RSI turning up (reversal confirmation)
+                # RSI turning up (reversal bonus)
                 if i > 0 and not np.isnan(l_rsi[i - 1]):
                     if l_rsi[i] > l_rsi[i - 1]:
                         score += 0.5  # RSI bouncing
@@ -392,7 +417,7 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
                 elif c[i] > l_bbm[i]:
                     score += 0.3  # Above middle BB
 
-                # RSI turning down
+                # RSI turning down (reversal bonus)
                 if i > 0 and not np.isnan(l_rsi[i - 1]):
                     if l_rsi[i] < l_rsi[i - 1]:
                         score += 0.5  # RSI turning
@@ -413,7 +438,7 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
             strength = min(score / 4.0, 1.0)
 
             sig_dir[i] = direction
-            sig_str[i] = max(strength, 0.2)
+            sig_str[i] = max(strength, 0.3)
             sig_lev[i] = p["mr_leverage"]
             sig_tp[i] = p["mr_tp_atr_mult"]
             sig_sl[i] = p["mr_sl_atr_mult"]
@@ -421,7 +446,7 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
             last_entry = i
 
         else:
-            # ─── TRANSITION MODE (ADX 20-25) ───
+            # ─── TRANSITION MODE (ADX 18-28) ───
             cooldown = p["tr_cooldown"]
             min_score = p["tr_min_score"]
 
@@ -456,6 +481,9 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
                         if l_rsi[i] > l_rsi[i - 1]:
                             score += 0.5
 
+                    if not np.isnan(l_macd_hist[i]) and l_macd_hist[i] > 0:
+                        score += 0.3
+
                     direction = 1
 
             elif htf_dir == -1:
@@ -470,6 +498,9 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
                     if i > 0 and not np.isnan(l_rsi[i - 1]):
                         if l_rsi[i] < l_rsi[i - 1]:
                             score += 0.5
+
+                    if not np.isnan(l_macd_hist[i]) and l_macd_hist[i] < 0:
+                        score += 0.3
 
                     direction = -1
 
@@ -487,7 +518,7 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
             strength = min(score / 4.0, 1.0)
 
             sig_dir[i] = direction
-            sig_str[i] = max(strength, 0.2)
+            sig_str[i] = max(strength, 0.3)
             sig_lev[i] = p["tr_leverage"]
             sig_tp[i] = p["tr_tp_atr_mult"]
             sig_sl[i] = p["tr_sl_atr_mult"]

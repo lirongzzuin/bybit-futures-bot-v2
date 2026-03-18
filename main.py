@@ -53,7 +53,7 @@ class TradingBot:
     def __init__(self):
         mode = "테스트넷" if BYBIT_TESTNET else "메인넷"
         logger.info("=" * 60)
-        logger.info(f"암호화폐 선물 자동매매 봇 v6.0")
+        logger.info(f"암호화폐 선물 자동매매 봇 v7.0")
         logger.info(f"  모드: {mode}")
         logger.info(f"  전략: Dual-Mode Adaptive (추세추종 + 평균회귀)")
         logger.info(f"  타임프레임: 15분봉 (4H 리샘플링)")
@@ -550,39 +550,7 @@ class TradingBot:
             if symbol in self.risk.state.open_positions:
                 self._manage_existing_position(symbol, signal_data=signal_data)
 
-                # 다단계 피라미딩: 같은 방향 강한 시그널 + 수익 중 → 최대 3회 추가 진입
-                # 1차: 원래 수량의 50%, 2차: 30%, 3차: 20%
-                # ★ 일봉 전환 시간대에는 피라미딩도 차단
-                if direction != 0 and strength >= 0.6 and not self.risk.is_daily_candle_transition():
-                    pos_info = self.risk.state.open_positions.get(symbol)
-                    if pos_info and pos_info.get("status") != "pending":
-                        pos_side = pos_info["side"]
-                        signal_side = "long" if direction == 1 else "short"
-                        pyramid_count = pos_info.get("pyramid_count", 0)
-                        max_pyramids = 3
-
-                        if pos_side == signal_side and pyramid_count < max_pyramids:
-                            # 수익률 체크: 피라미딩은 수익 중에만
-                            entry_p = pos_info["entry_price"]
-                            if (pos_side == "long" and price > entry_p) or \
-                               (pos_side == "short" and price < entry_p):
-                                # 강도 요구: 피라미딩 횟수 늘수록 더 강한 시그널 필요
-                                min_strength = 0.6 + pyramid_count * 0.1
-                                if strength >= min_strength:
-                                    logger.info(
-                                        f"[{symbol}] 피라미딩 #{pyramid_count+1}/{max_pyramids} | "
-                                        f"강도: {strength:.2f} (최소 {min_strength:.1f}) | "
-                                        f"방향: {signal_side}"
-                                    )
-                                    self.order_mgr.execute_pyramid(
-                                        symbol=symbol,
-                                        side=pos_side,
-                                        current_price=price,
-                                        atr=atr,
-                                        signal_strength=strength,
-                                        leverage=leverage,
-                                    )
-                                    pos_info["pyramid_count"] = pyramid_count + 1
+                # v7.0: 피라미딩 비활성화 (소액 계좌에서 레버리지 폭발 위험)
                 return
 
             # 4. 신규 진입 (전략 심볼에만 적용)
@@ -615,7 +583,7 @@ class TradingBot:
                 f"TP: {fmt(tp_price)} | SL: {fmt(sl_price)}"
             )
 
-            # 진입 실행
+            # 진입 실행 (v7.0: TP/SL 직접 전달 — ExitCondition 재계산 버그 방지)
             result = self.order_mgr.execute_entry(
                 symbol=symbol,
                 side=side,
@@ -624,16 +592,11 @@ class TradingBot:
                 tp_sl_ratio=tp_mult / sl_mult,
                 leverage=leverage,
                 signal_grade=f"str_{strength:.2f}",
-                strategy="dual_mode_adaptive_v6",
+                strategy="dual_mode_adaptive_v7",
                 signal_strength=strength,
+                tp_price=tp_price,
+                sl_price=sl_price,
             )
-
-            if result and result.get("order_type") == "market":
-                try:
-                    pos_idx = 1 if side == "long" else 2
-                    self.client.set_tp_sl(symbol, take_profit=tp_price, stop_loss=sl_price, position_idx=pos_idx)
-                except Exception as e:
-                    logger.error(f"[{symbol}] TP/SL 설정 실패: {e}")
 
         except Exception as e:
             logger.error(f"[{symbol}] 처리 에러: {e}", exc_info=True)
