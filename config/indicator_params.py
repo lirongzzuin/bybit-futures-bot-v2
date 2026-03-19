@@ -49,7 +49,7 @@ TRADING = {
     "max_leverage": 20,               # was 30 — reduced for safety
     "default_timeframe": "15",        # 15-minute candles (4H via resampling)
     "risk_per_trade": 0.03,           # 3% base (잔고별 자동 조정)
-    "max_open_positions": 3,          # was 5 — fewer simultaneous positions
+    "max_open_positions": 2,          # was 3 — reduce correlated drawdown (v7.2)
     "max_daily_loss": 0.10,           # was 0.15 — tighter daily limit
 }
 
