@@ -59,6 +59,53 @@ def _init_tables(conn: sqlite3.Connection):
             updated_at TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS tp_sl_adjustments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            adjust_type TEXT NOT NULL,
+            old_value REAL,
+            new_value REAL,
+            reason TEXT,
+            signal_strength REAL DEFAULT 0,
+            pnl_pct REAL DEFAULT 0,
+            price_at_adjust REAL DEFAULT 0,
+            entry_price REAL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS post_exit_tracking (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id INTEGER,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            entry_price REAL NOT NULL,
+            exit_price REAL NOT NULL,
+            exit_reason TEXT,
+            exit_time TEXT NOT NULL,
+            check_time TEXT NOT NULL,
+            minutes_after INTEGER NOT NULL,
+            price_at_check REAL NOT NULL,
+            would_be_pnl_pct REAL DEFAULT 0,
+            actual_pnl_pct REAL DEFAULT 0,
+            missed_pnl_pct REAL DEFAULT 0,
+            leverage INTEGER DEFAULT 1
+        );
+
+        CREATE TABLE IF NOT EXISTS skipped_signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            signal_strength REAL DEFAULT 0,
+            skip_reason TEXT,
+            price REAL DEFAULT 0,
+            atr REAL DEFAULT 0,
+            rsi REAL DEFAULT 0,
+            market_regime TEXT,
+            leverage INTEGER DEFAULT 1
+        );
+
         CREATE TABLE IF NOT EXISTS paper_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,
@@ -200,6 +247,165 @@ def record_paper_trade(
     conn.close()
 
 
+def record_tp_sl_adjustment(
+    symbol: str, side: str, adjust_type: str, old_value: float,
+    new_value: float, reason: str = "", signal_strength: float = 0,
+    pnl_pct: float = 0, price_at_adjust: float = 0, entry_price: float = 0
+):
+    """TP/SL 조정 이력 기록"""
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO tp_sl_adjustments
+        (timestamp, symbol, side, adjust_type, old_value, new_value, reason,
+         signal_strength, pnl_pct, price_at_adjust, entry_price)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (datetime.utcnow().isoformat(), symbol, side, adjust_type, old_value,
+         new_value, reason, signal_strength, pnl_pct, price_at_adjust, entry_price)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_tp_sl_adjustment_analysis(hours: int = 168) -> dict:
+    """TP/SL 조정 이력 분석"""
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT * FROM tp_sl_adjustments
+        WHERE timestamp >= datetime('now', ?)
+        ORDER BY timestamp DESC""",
+        (f"-{hours} hours",)
+    ).fetchall()
+    conn.close()
+
+    records = [dict(r) for r in rows]
+    if not records:
+        return {"count": 0, "message": "No TP/SL adjustments yet"}
+
+    by_reason = {}
+    for r in records:
+        reason = r.get("reason", "unknown")
+        if reason not in by_reason:
+            by_reason[reason] = {"count": 0, "symbols": set()}
+        by_reason[reason]["count"] += 1
+        by_reason[reason]["symbols"].add(r["symbol"])
+    for v in by_reason.values():
+        v["symbols"] = list(v["symbols"])
+
+    return {
+        "total_adjustments": len(records),
+        "by_reason": by_reason,
+        "records": records[:100],
+    }
+
+
+def record_post_exit(
+    trade_id: int, symbol: str, side: str, entry_price: float,
+    exit_price: float, exit_reason: str, exit_time: str,
+    minutes_after: int, price_at_check: float, leverage: int = 1
+):
+    """청산 후 가격 추적 기록"""
+    # 실제 PnL% (청산 시)
+    if side == "long":
+        actual_pnl_pct = (exit_price - entry_price) / entry_price * 100 * leverage
+        would_be_pnl_pct = (price_at_check - entry_price) / entry_price * 100 * leverage
+    else:
+        actual_pnl_pct = (entry_price - exit_price) / entry_price * 100 * leverage
+        would_be_pnl_pct = (entry_price - price_at_check) / entry_price * 100 * leverage
+
+    missed_pnl_pct = would_be_pnl_pct - actual_pnl_pct
+
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO post_exit_tracking
+        (trade_id, symbol, side, entry_price, exit_price, exit_reason, exit_time,
+         check_time, minutes_after, price_at_check, would_be_pnl_pct, actual_pnl_pct,
+         missed_pnl_pct, leverage)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (trade_id, symbol, side, entry_price, exit_price, exit_reason, exit_time,
+         datetime.utcnow().isoformat(), minutes_after, price_at_check,
+         would_be_pnl_pct, actual_pnl_pct, missed_pnl_pct, leverage)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_post_exit_analysis(hours: int = 168) -> dict:
+    """청산 후 가격 추적 분석"""
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT * FROM post_exit_tracking
+        WHERE exit_time >= datetime('now', ?)
+        ORDER BY exit_time DESC, minutes_after ASC""",
+        (f"-{hours} hours",)
+    ).fetchall()
+    conn.close()
+
+    records = [dict(r) for r in rows]
+    if not records:
+        return {"count": 0, "message": "No post-exit tracking data yet"}
+
+    # 청산 사유별 + 시간별 분석
+    by_reason_time = {}
+    for r in records:
+        reason = r.get("exit_reason", "unknown")
+        mins = r["minutes_after"]
+        key = f"{reason}_{mins}min"
+        if key not in by_reason_time:
+            by_reason_time[key] = {
+                "exit_reason": reason, "minutes_after": mins,
+                "count": 0, "avg_missed_pnl_pct": 0,
+                "missed_positive": 0, "missed_negative": 0,
+                "total_missed": 0,
+            }
+        entry = by_reason_time[key]
+        entry["count"] += 1
+        entry["total_missed"] += r["missed_pnl_pct"]
+        if r["missed_pnl_pct"] > 0:
+            entry["missed_positive"] += 1  # 너무 일찍 청산 (돈 더 벌 수 있었음)
+        else:
+            entry["missed_negative"] += 1  # 적시 청산 (더 버텼으면 손실)
+
+    for v in by_reason_time.values():
+        v["avg_missed_pnl_pct"] = v["total_missed"] / v["count"] if v["count"] > 0 else 0
+
+    return {
+        "total_records": len(records),
+        "summary": list(by_reason_time.values()),
+        "records": records[:100],
+    }
+
+
+def record_skipped_signal(
+    symbol: str, side: str, signal_strength: float = 0,
+    skip_reason: str = "", price: float = 0, atr: float = 0,
+    rsi: float = 0, market_regime: str = "", leverage: int = 1
+):
+    """스킵된 시그널 기록 (개선 분석용)"""
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO skipped_signals
+        (timestamp, symbol, side, signal_strength, skip_reason, price, atr, rsi, market_regime, leverage)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (datetime.utcnow().isoformat(), symbol, side, signal_strength,
+         skip_reason, price, atr, rsi, market_regime, leverage)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_skipped_signals(hours: int = 168) -> list[dict]:
+    """스킵된 시그널 조회"""
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT * FROM skipped_signals
+        WHERE timestamp >= datetime('now', ?)
+        ORDER BY timestamp DESC""",
+        (f"-{hours} hours",)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def get_paper_trade_analysis(hours: int = 168) -> dict:
     """페이퍼 트레이딩 분석 (기본 7일)"""
     conn = get_db()
@@ -250,6 +456,44 @@ def get_paper_trade_analysis(hours: int = 168) -> dict:
         exit_stats[reason]["count"] += 1
         exit_stats[reason]["pnl"] += t["pnl"]
 
+    # v7.3: 시그널 강도 구간별 분석
+    strength_buckets = {}
+    for t in trades:
+        s = t.get("signal_strength", 0)
+        # 0.05 단위 버킷 (예: 0.65, 0.70, 0.75)
+        bucket = round(int(s * 20) / 20, 2)
+        if bucket not in strength_buckets:
+            strength_buckets[bucket] = {"count": 0, "wins": 0, "pnl": 0, "avg_pnl": 0}
+        strength_buckets[bucket]["count"] += 1
+        strength_buckets[bucket]["pnl"] += t["pnl"]
+        if t["pnl"] > 0:
+            strength_buckets[bucket]["wins"] += 1
+    for b in strength_buckets.values():
+        b["win_rate"] = b["wins"] / b["count"] * 100 if b["count"] > 0 else 0
+        b["avg_pnl"] = b["pnl"] / b["count"]
+
+    # v7.3: MFE/MAE 파싱 (note 필드에서)
+    mfe_mae_stats = []
+    for t in trades:
+        note = t.get("note", "") or ""
+        parsed = {}
+        for pair in note.split("|"):
+            if ":" in pair:
+                k, v = pair.split(":", 1)
+                parsed[k] = v
+        if "MFE" in parsed and "MAE" in parsed:
+            try:
+                mfe_mae_stats.append({
+                    "symbol": t["symbol"],
+                    "pnl": t["pnl"],
+                    "mfe": float(parsed["MFE"].replace("%", "").replace("+", "")),
+                    "mae": float(parsed["MAE"].replace("%", "").replace("+", "")),
+                    "hold_min": int(parsed.get("hold", "0").replace("min", "")),
+                    "exit_reason": t.get("exit_reason", ""),
+                })
+            except (ValueError, KeyError):
+                pass
+
     return {
         "count": len(trades),
         "wins": len(wins),
@@ -264,6 +508,8 @@ def get_paper_trade_analysis(hours: int = 168) -> dict:
         "regime_stats": regime_stats,
         "symbol_stats": symbol_stats,
         "exit_stats": exit_stats,
+        "strength_analysis": dict(sorted(strength_buckets.items())),
+        "mfe_mae_stats": mfe_mae_stats,
         "trades": trades[:50],  # 최근 50개
     }
 

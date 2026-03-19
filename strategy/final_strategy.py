@@ -546,6 +546,19 @@ def get_current_signal(df):
     mode_map = {0: "none", 1: "trend", 2: "range", 3: "transition"}
     mode_val = int(last.get("sig_mode", 0))
 
+    # v7.3: RSI, 볼륨 비율 추가 (데이터 수집용)
+    rsi_val = 0.0
+    vol_ratio = 0.0
+    try:
+        rsi_s = calc_rsi(df["close"], OPTIMAL_PARAMS.get("ltf_rsi_period", 14))
+        if len(rsi_s) > 0 and not np.isnan(rsi_s.iloc[-1]):
+            rsi_val = float(rsi_s.iloc[-1])
+        vol_ma = df["volume"].rolling(OPTIMAL_PARAMS.get("volume_ma_period", 20)).mean()
+        if len(vol_ma) > 0 and not np.isnan(vol_ma.iloc[-1]) and vol_ma.iloc[-1] > 0:
+            vol_ratio = float(df["volume"].iloc[-1] / vol_ma.iloc[-1])
+    except Exception:
+        pass
+
     return {
         "direction": int(last["sig_direction"]),
         "strength": float(last["sig_strength"]),
@@ -556,4 +569,6 @@ def get_current_signal(df):
         "atr": float(calc_atr(df).iloc[-1]),
         "close": float(last["close"]),
         "mode": mode_map.get(mode_val, "none"),
+        "rsi": rsi_val,
+        "vol_ratio": vol_ratio,
     }

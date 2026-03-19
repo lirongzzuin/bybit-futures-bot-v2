@@ -14,7 +14,7 @@ from typing import Optional
 from datetime import datetime, timezone
 
 from exchange.bybit_client import BybitClient
-from data.storage import record_paper_trade, get_state, set_state
+from data.storage import record_paper_trade, record_post_exit, get_state, set_state
 from utils.logger import setup_logger
 from utils.notifier import notify
 
@@ -55,6 +55,11 @@ class PaperBybitClient(BybitClient):
 
         # 심볼별 레버리지 저장
         self._leverage_map: dict = {}
+
+        # v7.3: 청산 후 가격 추적 큐
+        # [{symbol, side, entry_price, exit_price, exit_reason, exit_time, leverage, trade_id, checks_done}]
+        self._post_exit_queue: list = []
+        self._POST_EXIT_CHECK_MINUTES = [15, 30, 60, 120, 240]  # 15분, 30분, 1시간, 2시간, 4시간 후
 
         # DB에서 상태 복원
         self._restore_state()
@@ -296,6 +301,9 @@ class PaperBybitClient(BybitClient):
             "unrealized_pnl": 0,
             "opened_at": datetime.now(timezone.utc).isoformat(),
             "signal_info": signal_info or {},
+            # v7.3: MFE/MAE 추적 (최대 유리/불리 가격)
+            "max_favorable_price": price,
+            "max_adverse_price": price,
         }
 
     def _close_paper_position(self, symbol: str, side: str, qty: float, price: float,
@@ -330,6 +338,28 @@ class PaperBybitClient(BybitClient):
         # 시그널 정보 추출
         sig = pos.get("signal_info", {})
 
+        # v7.3: MFE/MAE 계산 (레버리지 적용)
+        mf_price = pos.get("max_favorable_price", price)
+        ma_price = pos.get("max_adverse_price", price)
+        if pos["side"] == "Buy":
+            mfe_pct = (mf_price - entry) / entry * 100 * lev
+            mae_pct = (ma_price - entry) / entry * 100 * lev
+        else:
+            mfe_pct = (entry - mf_price) / entry * 100 * lev
+            mae_pct = (entry - ma_price) / entry * 100 * lev
+
+        # v7.3: 보유 시간 계산 (분)
+        opened_at_str = pos.get("opened_at", "")
+        hold_minutes = 0
+        if opened_at_str:
+            try:
+                opened_at = datetime.fromisoformat(opened_at_str)
+                if opened_at.tzinfo is None:
+                    opened_at = opened_at.replace(tzinfo=timezone.utc)
+                hold_minutes = int((datetime.now(timezone.utc) - opened_at).total_seconds() / 60)
+            except Exception:
+                pass
+
         self._paper_trades.append({
             "symbol": symbol,
             "side": pos["side"],
@@ -346,6 +376,14 @@ class PaperBybitClient(BybitClient):
         # DB에 기록 (전략 개선 분석용)
         try:
             side_str = "long" if pos["side"] == "Buy" else "short"
+            # note에 MFE/MAE/보유시간/4H확인 등 상세 정보 기록
+            detail_note = (
+                f"MFE:{mfe_pct:+.2f}%|MAE:{mae_pct:+.2f}%|"
+                f"hold:{hold_minutes}min|"
+                f"mf_price:{mf_price}|ma_price:{ma_price}|"
+                f"rsi:{sig.get('rsi', 0):.1f}|vol_ratio:{sig.get('vol_ratio', 0):.2f}|"
+                f"h4_confirm:{sig.get('h4_confirmed', 'N/A')}"
+            )
             record_paper_trade(
                 symbol=symbol,
                 side=side_str,
@@ -363,7 +401,19 @@ class PaperBybitClient(BybitClient):
                 sl_atr_mult=sig.get("sl_atr_mult", 0),
                 atr_at_entry=sig.get("atr", 0),
                 balance_after=self._paper_balance,
+                note=detail_note,
             )
+            # v7.3: 청산 후 가격 추적 큐에 등록
+            self._post_exit_queue.append({
+                "symbol": symbol,
+                "side": side_str,
+                "entry_price": entry,
+                "exit_price": price,
+                "exit_reason": exit_reason,
+                "exit_time": datetime.now(timezone.utc).isoformat(),
+                "leverage": lev,
+                "checks_done": set(),
+            })
         except Exception as e:
             logger.warning(f"[PAPER] DB 기록 실패: {e}")
 
@@ -407,6 +457,14 @@ class PaperBybitClient(BybitClient):
             else:
                 pos["unrealized_pnl"] = (entry - price) * pos["size"] * lev
 
+            # v7.3: MFE/MAE 추적 (최대 유리/불리 가격)
+            if pos["side"] == "Buy":
+                pos["max_favorable_price"] = max(pos.get("max_favorable_price", price), price)
+                pos["max_adverse_price"] = min(pos.get("max_adverse_price", price), price)
+            else:
+                pos["max_favorable_price"] = min(pos.get("max_favorable_price", price), price)
+                pos["max_adverse_price"] = max(pos.get("max_adverse_price", price), price)
+
             hit = False
             reason = ""
 
@@ -429,6 +487,58 @@ class PaperBybitClient(BybitClient):
 
         if state_changed:
             self._save_state()
+
+        # v7.3: 청산 후 가격 추적 체크
+        self._check_post_exit_prices()
+
+    def _check_post_exit_prices(self):
+        """청산된 포지션의 후속 가격 추적 (15분~4시간)"""
+        completed = []
+        for i, item in enumerate(self._post_exit_queue):
+            try:
+                exit_time = datetime.fromisoformat(item["exit_time"])
+                if exit_time.tzinfo is None:
+                    exit_time = exit_time.replace(tzinfo=timezone.utc)
+                elapsed_min = (datetime.now(timezone.utc) - exit_time).total_seconds() / 60
+            except Exception:
+                completed.append(i)
+                continue
+
+            for check_min in self._POST_EXIT_CHECK_MINUTES:
+                if check_min in item["checks_done"]:
+                    continue
+                if elapsed_min >= check_min:
+                    try:
+                        ticker = super().get_ticker(item["symbol"])
+                        current_price = ticker["last_price"]
+                        record_post_exit(
+                            trade_id=0,
+                            symbol=item["symbol"],
+                            side=item["side"],
+                            entry_price=item["entry_price"],
+                            exit_price=item["exit_price"],
+                            exit_reason=item["exit_reason"],
+                            exit_time=item["exit_time"],
+                            minutes_after=check_min,
+                            price_at_check=current_price,
+                            leverage=item["leverage"],
+                        )
+                        item["checks_done"].add(check_min)
+                        logger.info(
+                            f"[POST-EXIT] [{item['symbol']}] {check_min}분 후 "
+                            f"| 청산가: {item['exit_price']:.4f} → 현재: {current_price:.4f} "
+                            f"| 사유: {item['exit_reason']}"
+                        )
+                    except Exception as e:
+                        logger.debug(f"[POST-EXIT] 가격 조회 실패 {item['symbol']}: {e}")
+
+            # 모든 체크 완료 시 큐에서 제거
+            if len(item["checks_done"]) >= len(self._POST_EXIT_CHECK_MINUTES):
+                completed.append(i)
+
+        # 완료된 항목 제거 (역순)
+        for i in sorted(completed, reverse=True):
+            self._post_exit_queue.pop(i)
 
     def check_limit_fills(self):
         """
