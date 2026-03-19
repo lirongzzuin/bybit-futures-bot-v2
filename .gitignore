@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 data/cache/
 *.db
-reports/
+reports/*.html
+!reports/*.md
 .venv/
 venv/

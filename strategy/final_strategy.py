@@ -31,8 +31,8 @@ OPTIMAL_PARAMS = {
     "adx_trend_threshold": 25,
     "adx_range_threshold": 20,
     # TREND-FOLLOWING mode (ADX >= 25)
-    "tf_tp_atr_mult": 4.0,          # wide TP for max returns (proven)
-    "tf_sl_atr_mult": 2.0,          # wide SL to survive pullbacks
+    "tf_tp_atr_mult": 3.0,          # was 4.0 — more achievable TP target
+    "tf_sl_atr_mult": 2.0,          # restored — 1.5 caused excessive stop-outs in choppy markets
     "tf_leverage": 15,               # was 20 — reduced for live safety
     "tf_cooldown": 6,                # proven
     "tf_min_score": 2.0,             # proven
@@ -47,8 +47,8 @@ OPTIMAL_PARAMS = {
     "mr_rsi_oversold": 30,           # proven
     "mr_rsi_overbought": 70,         # proven
     # TRANSITION mode (ADX 20-25)
-    "tr_tp_atr_mult": 2.0,          # proven
-    "tr_sl_atr_mult": 1.5,          # proven
+    "tr_tp_atr_mult": 1.8,          # was 2.0 — tighter
+    "tr_sl_atr_mult": 1.5,          # restored — 1.2 too tight for transition zone
     "tr_leverage": 15,               # was 20 — reduced
     "tr_cooldown": 6,                # proven
     "tr_min_score": 2.5,             # proven (strict)

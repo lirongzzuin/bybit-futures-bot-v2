@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import pandas as pd
 import schedule
 
-from config.settings import BYBIT_TESTNET
+from config.settings import BYBIT_TESTNET, PAPER_TRADING, PAPER_INITIAL_BALANCE
 from config.indicator_params import SYMBOLS, ORDER_TYPE_CONFIG
 from strategy.final_strategy import (
     generate_signals, get_current_signal, calc_atr,
@@ -51,7 +51,13 @@ class TradingBot:
     """메인 트레이딩 봇"""
 
     def __init__(self):
-        mode = "테스트넷" if BYBIT_TESTNET else "메인넷"
+        if PAPER_TRADING:
+            self.mode_str = "📋 페이퍼 트레이딩"
+        elif BYBIT_TESTNET:
+            self.mode_str = "테스트넷"
+        else:
+            self.mode_str = "메인넷"
+        mode = self.mode_str
         logger.info("=" * 60)
         logger.info(f"암호화폐 선물 자동매매 봇 v7.0")
         logger.info(f"  모드: {mode}")
@@ -63,7 +69,16 @@ class TradingBot:
         logger.info("=" * 60)
 
         # 거래소 클라이언트
-        self.client = BybitClient()
+        self.paper_mode = PAPER_TRADING
+        if self.paper_mode:
+            from exchange.paper_client import PaperBybitClient
+            self.client = PaperBybitClient(
+                initial_balance=PAPER_INITIAL_BALANCE,
+                testnet=False,  # 실제 시장 데이터 사용
+            )
+            logger.info(f"  📋 페이퍼 트레이딩 모드 (가상 잔고: ${PAPER_INITIAL_BALANCE:.2f})")
+        else:
+            self.client = BybitClient()
         balance = self.client.get_balance()
         logger.info(f"  잔고: {balance['total']:.2f} USDT")
 
@@ -77,8 +92,9 @@ class TradingBot:
         self.safe_mode = False
         self.running = True
 
-        # 시작 시 기존 포지션 동기화
-        self._sync_positions_from_exchange()
+        # 시작 시 기존 포지션 동기화 (페이퍼 모드에서는 건너뜀)
+        if not self.paper_mode:
+            self._sync_positions_from_exchange()
 
         # 시그널 핸들러 등록 (봇 종료 알림)
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -240,50 +256,54 @@ class TradingBot:
             strength = signal_data["strength"]
             atr = signal_data["atr"]
 
-            # A) 반대 시그널 → 즉시 시장가 청산
+            # A) 반대 시그널 → 강한 시그널만 청산 (약한 시그널은 무시)
             if direction != 0:
                 is_reverse = (direction == 1 and side == "short") or \
                              (direction == -1 and side == "long")
-                if is_reverse:
-                    logger.info(f"[{symbol}] 반대 시그널 (강도 {strength:.2f}) → 즉시 청산")
+                if is_reverse and strength >= 0.65:
+                    logger.info(f"[{symbol}] 강한 반대 시그널 (강도 {strength:.2f}) → 청산")
                     self.order_mgr.execute_exit(symbol, reason="reverse_signal")
                     return
+                elif is_reverse:
+                    logger.debug(f"[{symbol}] 약한 반대 시그널 (강도 {strength:.2f}) → 무시")
 
-            # B) 같은 방향 강한 시그널 → SL 확장 (여유 확보)
-            if direction != 0 and strength >= 0.5 and not is_reverse:
+            # B) 같은 방향 매우 강한 시그널 → SL 확장 (여유 확보)
+            if direction != 0 and strength >= 0.8 and not is_reverse:
                 self.order_mgr.update_dynamic_sl(symbol, price, atr, strength)
 
             # C) 모멘텀 반전 감지: 수익 중 + RSI 극단에서 '꺾이기 시작'할 때만 청산
             #    단순히 RSI > 80이면 청산하지 않음 (RSI 80 이상에서 계속 오를 수 있음)
             #    RSI > 75 AND RSI가 직전 2봉 대비 하락 시작 → 상승 모멘텀 반전 확인
             #    RSI < 25 AND RSI가 직전 2봉 대비 상승 시작 → 하락 모멘텀 반전 확인
-            if unrealized_pct > 0.02:
+            # C) RSI 반전: 수익 3%+ AND RSI 극단 AND 3봉 연속 꺾임 (더 보수적)
+            if unrealized_pct > 0.03:
                 try:
                     df_check = self.fetch_data(symbol, limit=30)
-                    if not df_check.empty and len(df_check) >= 5:
+                    if not df_check.empty and len(df_check) >= 6:
                         from strategy.final_strategy import calc_rsi
                         rsi_series = calc_rsi(df_check["close"], 14)
-                        if len(rsi_series) >= 3:
+                        if len(rsi_series) >= 4:
                             r_now = rsi_series.iloc[-1]
                             r_prev = rsi_series.iloc[-2]
                             r_prev2 = rsi_series.iloc[-3]
-                            if not pd.isna(r_now) and not pd.isna(r_prev) and not pd.isna(r_prev2):
-                                # 롱: RSI > 75 + 2봉 연속 하락 (고점에서 꺾임)
-                                if (side == "long" and r_now > 75 and
-                                        r_now < r_prev and r_prev < r_prev2):
+                            r_prev3 = rsi_series.iloc[-4]
+                            if not pd.isna(r_now) and not pd.isna(r_prev) and not pd.isna(r_prev2) and not pd.isna(r_prev3):
+                                # 롱: RSI > 78 + 3봉 연속 하락 (확실한 꺾임)
+                                if (side == "long" and r_now > 78 and
+                                        r_now < r_prev < r_prev2 < r_prev3):
                                     logger.info(
-                                        f"[{symbol}] RSI 반전 감지! "
-                                        f"{r_prev2:.0f}→{r_prev:.0f}→{r_now:.0f} (하락 전환) "
+                                        f"[{symbol}] RSI 반전 확인! "
+                                        f"{r_prev3:.0f}→{r_prev2:.0f}→{r_prev:.0f}→{r_now:.0f} "
                                         f"수익 {unrealized_pct:.1%} → 시장가 익절")
                                     self.order_mgr.execute_exit(
                                         symbol, reason=f"rsi_reversal_{r_now:.0f}")
                                     return
-                                # 숏: RSI < 25 + 2봉 연속 상승 (저점에서 꺾임)
-                                elif (side == "short" and r_now < 25 and
-                                        r_now > r_prev and r_prev > r_prev2):
+                                # 숏: RSI < 22 + 3봉 연속 상승 (확실한 꺾임)
+                                elif (side == "short" and r_now < 22 and
+                                        r_now > r_prev > r_prev2 > r_prev3):
                                     logger.info(
-                                        f"[{symbol}] RSI 반전 감지! "
-                                        f"{r_prev2:.0f}→{r_prev:.0f}→{r_now:.0f} (상승 전환) "
+                                        f"[{symbol}] RSI 반전 확인! "
+                                        f"{r_prev3:.0f}→{r_prev2:.0f}→{r_prev:.0f}→{r_now:.0f} "
                                         f"수익 {unrealized_pct:.1%} → 시장가 익절")
                                     self.order_mgr.execute_exit(
                                         symbol, reason=f"rsi_reversal_{r_now:.0f}")
@@ -291,8 +311,8 @@ class TradingBot:
                 except Exception:
                     pass
 
-            # D) ATR 수축 감지: 변동성 급감 = 추세 종료 신호 → SL 타이트닝
-            if unrealized_pct > 0.03 and atr > 0:
+            # D) ATR 수축 감지: 변동성 급감 = 추세 종료 신호 → SL 타이트닝 (수익 5%+ 이상만)
+            if unrealized_pct > 0.05 and atr > 0:
                 try:
                     df_atr = self.fetch_data(symbol, limit=50)
                     if not df_atr.empty and len(df_atr) >= 30:
@@ -302,7 +322,7 @@ class TradingBot:
                         avg_atr = atr_series.iloc[-20:].mean()
                         if not pd.isna(recent_atr) and not pd.isna(avg_atr) and avg_atr > 0:
                             atr_ratio = recent_atr / avg_atr
-                            if atr_ratio < 0.6:  # ATR이 평균의 60% 미만 = 변동성 급감
+                            if atr_ratio < 0.5:  # ATR이 평균의 50% 미만 = 변동성 급감 (was 60%)
                                 # SL을 현재 수익의 85%로 타이트닝
                                 if side == "long":
                                     tight_sl = entry + (price - entry) * 0.85
@@ -583,6 +603,16 @@ class TradingBot:
                 f"TP: {fmt(tp_price)} | SL: {fmt(sl_price)}"
             )
 
+            # 페이퍼 모드: 시그널 정보 저장 (DB 기록용)
+            if self.paper_mode:
+                self.client.set_signal_info(symbol, {
+                    "market_regime": signal_data.get("mode", ""),
+                    "signal_strength": strength,
+                    "tp_atr_mult": tp_mult,
+                    "sl_atr_mult": sl_mult,
+                    "atr": atr,
+                })
+
             # 진입 실행 (v7.0: TP/SL 직접 전달 — ExitCondition 재계산 버그 방지)
             result = self.order_mgr.execute_entry(
                 symbol=symbol,
@@ -733,8 +763,9 @@ class TradingBot:
         if now.minute < 5:
             self.strategy_symbols = self._load_strategy_symbols()
 
-        # 포지션 청산 감지 (TP/SL 서버사이드 체결)
-        self._check_position_closures()
+        # 포지션 청산 감지 (TP/SL 서버사이드 체결) — 페이퍼 모드에서는 check_tp_sl()이 대신 처리
+        if not self.paper_mode:
+            self._check_position_closures()
 
         # 모든 모니터링 심볼 처리 (전략 심볼 + 보유 포지션 심볼)
         for symbol in self.symbols:
@@ -746,8 +777,15 @@ class TradingBot:
         positions = self.client.get_positions()
         open_syms = [p["symbol"] for p in positions]
         tracked = list(self.risk.state.open_positions.keys())
-        logger.info(f"  잔고: {balance['total']:.2f} | "
-                    f"Bybit 포지션: {open_syms} | 추적 중: {tracked}")
+        paper_tag = " [PAPER]" if self.paper_mode else ""
+        logger.info(f"  잔고: {balance['total']:.2f}{paper_tag} | "
+                    f"포지션: {open_syms} | 추적 중: {tracked}")
+
+        # 페이퍼 모드: 6시간마다 요약 출력
+        if self.paper_mode:
+            now = datetime.now(timezone.utc)
+            if now.hour % 6 == 0 and now.minute < 5:
+                logger.info(f"\n{self.client.get_paper_summary()}")
 
     def monitor(self):
         """1분마다 포지션 실시간 모니터링 + 동적 TP/SL 관리"""
@@ -755,14 +793,20 @@ class TradingBot:
             # 실제 잔고 동기화
             self._sync_balance()
 
+            # 페이퍼 모드: TP/SL + 지정가 체결 체크
+            if self.paper_mode:
+                self.client.check_tp_sl()
+                self.client.check_limit_fills()
+
             # 긴급 청산 체크 (실제 잔고 기준)
             if self.risk.should_emergency_close():
                 self.order_mgr.emergency_close_all()
                 self.safe_mode = True
                 return
 
-            # 서버사이드 TP/SL 체결 감지
-            self._check_position_closures()
+            # 서버사이드 TP/SL 체결 감지 (페이퍼 모드에서는 위에서 처리)
+            if not self.paper_mode:
+                self._check_position_closures()
 
             # ★ 일봉 전환 보호: KST 09:00 전후 SL 타이트닝
             is_candle_transition = self.risk.is_daily_candle_transition()
@@ -831,7 +875,7 @@ class TradingBot:
 
     def _start_health_server(self):
         """fly.io 헬스체크용 간단 HTTP 서버 (별도 스레드)"""
-        from flask import Flask, jsonify
+        from flask import Flask, jsonify, request
         app = Flask(__name__)
 
         @app.route("/health")
@@ -842,13 +886,23 @@ class TradingBot:
         def status():
             balance = self.client.get_balance()
             positions = self.client.get_positions()
-            return jsonify({
+            data = {
                 "balance": balance["total"],
                 "positions": len(positions),
                 "tracked": list(self.risk.state.open_positions.keys()),
                 "strategy_symbols": self.strategy_symbols,
                 "safe_mode": self.safe_mode,
-            })
+                "paper_mode": self.paper_mode,
+            }
+            if self.paper_mode:
+                data["paper_summary"] = self.client.get_paper_summary()
+            return jsonify(data)
+
+        @app.route("/paper-analysis")
+        def paper_analysis():
+            from data.storage import get_paper_trade_analysis
+            hours = int(request.args.get("hours", 168))
+            return jsonify(get_paper_trade_analysis(hours))
 
         port = int(os.getenv("WEBHOOK_PORT", "5000"))
         t = threading.Thread(
@@ -865,7 +919,7 @@ class TradingBot:
 
         pos_list = list(self.risk.state.open_positions.keys())
         notify("봇 시작", (
-            f"Dual-Mode Adaptive v6.0 | {'테스트넷' if BYBIT_TESTNET else '메인넷'}\n"
+            f"Dual-Mode Adaptive v7.0 | {self.mode_str}\n"
             f"타임프레임: 15분봉 (4H 크로스검증)\n"
             f"모니터링: 거래량 상위 {len(self.strategy_symbols)}개 심볼\n"
             f"시장가 기준: 강도 >= {ORDER_TYPE_CONFIG['strong_signal_threshold']}\n"

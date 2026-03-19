@@ -10,6 +10,8 @@ load_dotenv()
 BYBIT_API_KEY = os.getenv("BYBIT_API_KEY", "")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET", "")
 BYBIT_TESTNET = os.getenv("BYBIT_TESTNET", "true").lower() == "true"
+PAPER_TRADING = os.getenv("PAPER_TRADING", "false").lower() == "true"
+PAPER_INITIAL_BALANCE = float(os.getenv("PAPER_INITIAL_BALANCE", "10000"))
 
 # === Slack ===
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
