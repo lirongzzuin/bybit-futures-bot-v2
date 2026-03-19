@@ -162,6 +162,16 @@ class OrderManager:
             can_open, msg = self.risk.can_open_position(symbol)
             if not can_open:
                 logger.warning(f"[{symbol}] 진입 거부: {msg}")
+                try:
+                    from data.storage import record_skipped_signal
+                    record_skipped_signal(
+                        symbol=symbol, side=side,
+                        signal_strength=signal_strength,
+                        skip_reason=msg, price=entry_price,
+                        atr=atr, leverage=leverage,
+                    )
+                except Exception:
+                    pass
                 return None
 
         # 주문 타입 결정
@@ -182,13 +192,15 @@ class OrderManager:
             tp = self.client.round_price(symbol, tp)
             sl = self.client.round_price(symbol, sl)
 
-        # 시그널 강도 기반 비중 조절 (v3.0: 더 보수적)
-        if signal_strength >= 0.8:
-            size_mult = 1.3
-        elif signal_strength >= 0.5:
-            size_mult = 1.0
+        # v7.3: 시그널 강도 기반 비중 조절 (공격적 복리 극대화)
+        if signal_strength >= 0.9:
+            size_mult = 2.0    # 매우 강한 시그널 → 풀 공격
+        elif signal_strength >= 0.8:
+            size_mult = 1.5    # 강한 시그널
+        elif signal_strength >= 0.7:
+            size_mult = 1.2    # 보통
         else:
-            size_mult = 0.7
+            size_mult = 0.8    # 약한 시그널
 
         # 수수료를 고려한 포지션 사이즈
         balance = self.client.get_balance()
@@ -198,9 +210,10 @@ class OrderManager:
         )
         qty *= size_mult
 
-        # 레버리지 기반 최대 마진 제한
-        max_qty = (available * lev) / entry_price
-        qty = min(qty, max_qty * 0.95)
+        # v7.4: 포지션당 최대 마진 = 가용잔고의 30% (실전 안전장치)
+        max_margin_ratio = 0.30
+        max_qty = (available * max_margin_ratio * lev) / entry_price
+        qty = min(qty, max_qty)
 
         if qty <= 0:
             logger.warning(f"[{symbol}] 포지션 사이즈 0 — 진입 불가 "

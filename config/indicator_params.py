@@ -1,7 +1,8 @@
 """
-Indicator & Trading Parameters v5.0
-- Compound Growth Machine v5.0 strategy params
-- Aggressive risk management for 10,000%+ annual compound growth
+Indicator & Trading Parameters v7.4
+- Compound Growth Machine v7.4 strategy params
+- Aggressive risk management + MFE 누수 방지 개선
+- 실전 운용 모드 (v7.4)
 """
 
 # === Candle Master Plan (legacy, kept for compute_indicators compatibility) ===
@@ -42,15 +43,15 @@ VOLUME = {
     "ma_length": 20,
 }
 
-# === Trading Config (v5.0 — Compound Growth Machine) ===
+# === Trading Config (v7.4 — 실전 운용 + MFE 누수 방지) ===
 TRADING = {
     "exchange": "bybit",
     "default_leverage": 15,
-    "max_leverage": 20,               # was 30 — reduced for safety
+    "max_leverage": 20,
     "default_timeframe": "15",        # 15-minute candles (4H via resampling)
-    "risk_per_trade": 0.03,           # 3% base (잔고별 자동 조정)
-    "max_open_positions": 2,          # was 3 — reduce correlated drawdown (v7.2)
-    "max_daily_loss": 0.10,           # was 0.15 — tighter daily limit
+    "risk_per_trade": 0.04,           # 4% base (실전 안정성, v7.4)
+    "max_open_positions": 5,          # 5개 동시
+    "max_daily_loss": 0.15,           # 15% — 실전 안전장치 (was 20%, v7.4)
 }
 
 # === 일봉 전환 보호 (Daily Candle Transition Protection) ===

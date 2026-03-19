@@ -6,7 +6,8 @@ primary_region = "nrt"  # 도쿄 (Bybit 서버에 가까움)
 [env]
   PYTHONUNBUFFERED = "1"
   DATA_DIR = "/data"
-  BYBIT_TESTNET = "true"
+  BYBIT_TESTNET = "false"
+  PAPER_TRADING = "false"
 
 # 무료 티어: shared-cpu-1x, 256MB
 [[vm]]

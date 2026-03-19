@@ -59,7 +59,7 @@ class TradingBot:
             self.mode_str = "메인넷"
         mode = self.mode_str
         logger.info("=" * 60)
-        logger.info(f"암호화폐 선물 자동매매 봇 v7.0")
+        logger.info(f"암호화폐 선물 자동매매 봇 v7.4")
         logger.info(f"  모드: {mode}")
         logger.info(f"  전략: Dual-Mode Adaptive (추세추종 + 평균회귀)")
         logger.info(f"  타임프레임: 15분봉 (4H 리샘플링)")
@@ -92,8 +92,10 @@ class TradingBot:
         self.safe_mode = False
         self.running = True
 
-        # 시작 시 기존 포지션 동기화 (페이퍼 모드에서는 건너뜀)
-        if not self.paper_mode:
+        # 시작 시 기존 포지션 동기화
+        if self.paper_mode:
+            self._sync_paper_positions()
+        else:
             self._sync_positions_from_exchange()
 
         # 시그널 핸들러 등록 (봇 종료 알림)
@@ -109,6 +111,61 @@ class TradingBot:
         except Exception as e:
             logger.error(f"  상위 심볼 조회 실패, 기본 심볼 사용: {e}")
             return [SYMBOLS["primary"]] + SYMBOLS["alts"][:3]
+
+    def _sync_paper_positions(self):
+        """페이퍼 모드: DB에서 복원된 포지션을 risk_manager에 동기화"""
+        try:
+            paper_positions = self.client._paper_positions
+            if not paper_positions:
+                logger.info("  페이퍼 포지션 없음")
+                return
+
+            from config.indicator_params import TRADING as _TRADING
+            max_pos = _TRADING["max_open_positions"]
+
+            # 최신 포지션 우선: opened_at 기준 정렬 (최근 진입 우선 보존)
+            sorted_positions = sorted(
+                paper_positions.items(),
+                key=lambda x: x[1].get("opened_at", ""),
+                reverse=True
+            )
+
+            # 초과분 제거 (오래된 것부터)
+            if len(sorted_positions) > max_pos:
+                keep = {s for s, _ in sorted_positions[:max_pos]}
+                for symbol in list(paper_positions.keys()):
+                    if symbol not in keep:
+                        logger.warning(f"  [{symbol}] 최대 포지션({max_pos}) 초과 → 페이퍼 포지션 제거")
+                        del paper_positions[symbol]
+
+            synced = 0
+            for symbol, p in paper_positions.items():
+                if synced >= max_pos:
+                    break
+
+                side = "long" if p["side"] == "Buy" else "short"
+                self.risk.state.open_positions[symbol] = {
+                    "side": side,
+                    "entry_price": p["entry_price"],
+                    "quantity": p["size"],
+                    "original_qty": p["size"],
+                    "tp": p.get("take_profit", 0),
+                    "sl": p.get("stop_loss", 0),
+                    "status": "active",
+                    "partial_tp_done": False,
+                }
+                synced += 1
+                logger.info(
+                    f"  페이퍼 포지션 동기화: {symbol} {side.upper()} "
+                    f"qty={p['size']} entry={p['entry_price']}"
+                )
+
+            # 초과분 제거 후 저장
+            self.client._save_state()
+            logger.info(f"  페이퍼 포지션 {synced}개 동기화 완료 (최대 {max_pos}개)")
+
+        except Exception as e:
+            logger.error(f"  페이퍼 포지션 동기화 실패: {e}", exc_info=True)
 
     def _sync_positions_from_exchange(self):
         """Bybit에서 기존 포지션을 가져와 내부 상태 동기화"""
@@ -267,9 +324,12 @@ class TradingBot:
                 elif is_reverse:
                     logger.debug(f"[{symbol}] 약한 반대 시그널 (강도 {strength:.2f}) → 무시")
 
-            # B) 같은 방향 매우 강한 시그널 → SL 확장 (여유 확보)
-            if direction != 0 and strength >= 0.8 and not is_reverse:
-                self.order_mgr.update_dynamic_sl(symbol, price, atr, strength)
+            # B) 시그널 강도 기반 TP/SL 실시간 조정 (v7.3)
+            if direction != 0 and not is_reverse and atr > 0:
+                self._adjust_tp_sl_by_strength(
+                    symbol, side, price, entry, tp, sl, atr,
+                    strength, unrealized_pct, pos_info, pos_idx
+                )
 
             # C) 모멘텀 반전 감지: 수익 중 + RSI 극단에서 '꺾이기 시작'할 때만 청산
             #    단순히 RSI > 80이면 청산하지 않음 (RSI 80 이상에서 계속 오를 수 있음)
@@ -386,17 +446,19 @@ class TradingBot:
                 except Exception:
                     pass
 
-        # === Stage 2: 단계별 트레일링 SL ===
-        if unrealized_pct >= 0.02:
-            # 수익률에 따른 트레일링 비율 (보호 비율)
+        # === Stage 2: 단계별 트레일링 SL (v7.4 강화 — MFE 누수 방지) ===
+        if unrealized_pct >= 0.015:
+            # v7.4: 더 공격적인 수익 보호 (MFE 대비 실현 수익 괴리 해소)
             if unrealized_pct >= 0.10:
-                protect_ratio = 0.80  # 10%+ 수익 → 80% 보호
+                protect_ratio = 0.85  # 10%+ 수익 → 85% 보호 (was 80%)
             elif unrealized_pct >= 0.05:
-                protect_ratio = 0.65  # 5%+ → 65% 보호
+                protect_ratio = 0.75  # 5%+ → 75% 보호 (was 65%)
             elif unrealized_pct >= 0.03:
-                protect_ratio = 0.50  # 3%+ → 50% 보호
+                protect_ratio = 0.60  # 3%+ → 60% 보호 (was 50%)
+            elif unrealized_pct >= 0.02:
+                protect_ratio = 0.50  # 2%+ → 50% 보호 (was 35%)
             else:
-                protect_ratio = 0.35  # 2%+ → 35% 보호
+                protect_ratio = 0.40  # 1.5%+ → 40% 보호 (신규)
 
             if side == "long":
                 cur_high = pos_info.get("highest_price", price)
@@ -423,8 +485,17 @@ class TradingBot:
                     except Exception:
                         pass
 
-        # === Stage 3: 1차 부분 익절 (TP 50% 도달, 30% 청산) ===
-        if tp_progress >= 0.5 and not pos_info.get("partial_1_done"):
+        # === Stage 2.5: 조기 부분 익절 (TP 30% 도달, 25% 청산) — v7.4 MFE 누수 방지 ===
+        if tp_progress >= 0.3 and not pos_info.get("partial_early_done"):
+            logger.info(f"[{symbol}] TP 진행 {tp_progress:.0%} → 조기 부분 익절 (25%)")
+            self.order_mgr.execute_partial_close(
+                symbol, close_ratio=0.25,
+                reason=f"partial_early (진행 {tp_progress:.0%}, 수익 {unrealized_pct:.1%})"
+            )
+            pos_info["partial_early_done"] = True
+
+        # === Stage 3: 1차 부분 익절 (TP 60% 도달, 30% 청산) ===
+        if tp_progress >= 0.6 and not pos_info.get("partial_1_done"):
             logger.info(f"[{symbol}] TP 진행 {tp_progress:.0%} → 1차 부분 익절 (30%)")
             self.order_mgr.execute_partial_close(
                 symbol, close_ratio=0.3,
@@ -464,6 +535,191 @@ class TradingBot:
                 reason=f"partial_2 (진행 {tp_progress:.0%}, 수익 {unrealized_pct:.1%})"
             )
             pos_info["partial_2_done"] = True
+
+    def _adjust_tp_sl_by_strength(
+        self, symbol: str, side: str, price: float, entry: float,
+        tp: float, sl: float, atr: float, strength: float,
+        unrealized_pct: float, pos_info: dict, pos_idx: int
+    ):
+        """
+        v7.3: 시그널 강도 기반 TP/SL 실시간 조정
+
+        강도 구간별 행동:
+        - 0.9+ (매우 강함): TP 확대 (ATR×4.0), SL 여유 (ATR×2.5) → 큰 수익 기회 극대화
+        - 0.8+ (강함):      TP 확대 (ATR×3.5), SL 여유 (ATR×2.2) → 수익 기회 확대
+        - 0.7+ (보통):      TP 유지, SL 유지 → 기본 전략 유지
+        - 0.65+ (약함):     TP 축소 (ATR×2.0), SL 타이트 (ATR×1.5) → 빠른 익절/손절
+
+        추가 규칙:
+        - 수익 중 + 강한 시그널 → TP 확대 (수익 달리게)
+        - 수익 중 + 약한 시그널 → SL 타이트닝 (수익 보호)
+        - 손실 중 + 강한 시그널 → SL 여유 (회복 기회)
+        - 손실 중 + 약한 시그널 → 빠른 손절 유도
+        """
+        from data.storage import record_tp_sl_adjustment
+
+        # 마지막 조정 시점 체크 (너무 빈번한 조정 방지: 최소 5분 간격)
+        last_adjust = pos_info.get("last_strength_adjust_time", "")
+        now_str = datetime.now(timezone.utc).isoformat()
+        if last_adjust:
+            try:
+                last_dt = datetime.fromisoformat(last_adjust)
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
+                if (datetime.now(timezone.utc) - last_dt).total_seconds() < 300:
+                    return  # 5분 미만이면 스킵
+            except Exception:
+                pass
+
+        # 이전 강도 대비 변화 체크 (의미 있는 변화만 반영: 0.05 이상)
+        prev_strength = pos_info.get("last_signal_strength", strength)
+        strength_delta = strength - prev_strength
+        if abs(strength_delta) < 0.05 and pos_info.get("last_strength_adjust_time"):
+            return  # 강도 변화가 미미하면 스킵
+
+        adjusted = False
+
+        # === TP 조정 ===
+        if tp > 0:
+            # 강도별 TP ATR 배수 결정
+            if strength >= 0.9:
+                tp_atr_mult = 4.0   # 매우 강함 → 큰 수익 기회
+                tp_reason = "very_strong_signal"
+            elif strength >= 0.8:
+                tp_atr_mult = 3.5   # 강함 → 확대
+                tp_reason = "strong_signal"
+            elif strength >= 0.7:
+                tp_atr_mult = 3.0   # 보통 → 기본
+                tp_reason = "normal_signal"
+            else:
+                tp_atr_mult = 2.0   # 약함 → 빠른 익절
+                tp_reason = "weak_signal"
+
+            # 수익 중이면 TP를 더 공격적으로
+            if unrealized_pct > 0.02 and strength >= 0.8:
+                tp_atr_mult += 0.5  # 수익 + 강한 시그널 → 추가 확대
+                tp_reason += "+profitable"
+
+            if side == "long":
+                new_tp = price + atr * tp_atr_mult
+            else:
+                new_tp = price - atr * tp_atr_mult
+            new_tp = self.client.round_price(symbol, new_tp)
+
+            # TP는 현재가보다 유리한 방향으로만 (롱: 더 높게, 숏: 더 낮게)
+            tp_should_update = False
+            if side == "long":
+                # 강한 시그널 → TP 확대만 허용 / 약한 시그널 → TP 축소도 허용
+                if strength >= 0.8 and new_tp > tp:
+                    tp_should_update = True
+                elif strength < 0.7 and new_tp < tp and new_tp > price:
+                    tp_should_update = True
+            else:
+                if strength >= 0.8 and new_tp < tp:
+                    tp_should_update = True
+                elif strength < 0.7 and new_tp > tp and new_tp < price:
+                    tp_should_update = True
+
+            if tp_should_update:
+                try:
+                    self.client.set_tp_sl(symbol, take_profit=new_tp, position_idx=pos_idx)
+                    old_tp = tp
+                    pos_info["tp"] = new_tp
+                    adjusted = True
+                    logger.info(
+                        f"[{symbol}] TP 조정 (강도 {strength:.2f}): "
+                        f"{old_tp:.6f} → {new_tp:.6f} | ATR×{tp_atr_mult:.1f} | {tp_reason}"
+                    )
+                    record_tp_sl_adjustment(
+                        symbol=symbol, side=side, adjust_type="tp",
+                        old_value=old_tp, new_value=new_tp,
+                        reason=tp_reason, signal_strength=strength,
+                        pnl_pct=unrealized_pct * 100, price_at_adjust=price,
+                        entry_price=entry,
+                    )
+                except Exception as e:
+                    logger.warning(f"[{symbol}] TP 조정 실패: {e}")
+
+        # === SL 조정 ===
+        # 강도별 SL ATR 배수 결정
+        if strength >= 0.9:
+            sl_atr_mult = 2.5    # 매우 강함 → SL 여유
+            sl_reason = "very_strong_signal"
+        elif strength >= 0.8:
+            sl_atr_mult = 2.2    # 강함 → 약간 여유
+            sl_reason = "strong_signal"
+        elif strength >= 0.7:
+            sl_atr_mult = 2.0    # 보통 → 기본
+            sl_reason = "normal_signal"
+        else:
+            sl_atr_mult = 1.5    # 약함 → 타이트
+            sl_reason = "weak_signal"
+
+        # 수익 중 + 약한 시그널 → SL 더 타이트 (수익 보호)
+        if unrealized_pct > 0.02 and strength < 0.7:
+            sl_atr_mult = 1.2
+            sl_reason = "weak_signal+protect_profit"
+
+        # 손실 중 + 강한 시그널 → SL 여유 (회복 기회)
+        if unrealized_pct < -0.01 and strength >= 0.8:
+            sl_atr_mult = 2.5
+            sl_reason = "strong_signal+recovery_room"
+
+        if side == "long":
+            new_sl = price - atr * sl_atr_mult
+            new_sl = self.client.round_price(symbol, new_sl)
+            # 롱: 강한 시그널이면 SL 올리기만 / 약한 시그널이면 SL 올리기만 (더 타이트하게)
+            sl_should_update = False
+            if strength >= 0.8 and sl > 0:
+                # 강한 시그널: 기존 SL 유지 (여유 주되 내리지 않음)
+                if new_sl > sl:
+                    sl_should_update = True
+            elif strength < 0.7 and unrealized_pct > 0.01:
+                # 약한 시그널 + 수익 중: SL 타이트닝
+                tight_sl = entry + (price - entry) * 0.7  # 수익의 70% 보호
+                tight_sl = self.client.round_price(symbol, tight_sl)
+                if tight_sl > sl and tight_sl > entry:
+                    new_sl = tight_sl
+                    sl_should_update = True
+                    sl_reason = "weak_signal+tighten_profit"
+        else:
+            new_sl = price + atr * sl_atr_mult
+            new_sl = self.client.round_price(symbol, new_sl)
+            sl_should_update = False
+            if strength >= 0.8 and sl > 0:
+                if new_sl < sl:
+                    sl_should_update = True
+            elif strength < 0.7 and unrealized_pct > 0.01:
+                tight_sl = entry - (entry - price) * 0.7
+                tight_sl = self.client.round_price(symbol, tight_sl)
+                if (tight_sl < sl or sl >= entry) and tight_sl < entry:
+                    new_sl = tight_sl
+                    sl_should_update = True
+                    sl_reason = "weak_signal+tighten_profit"
+
+        if sl_should_update:
+            try:
+                self.client.set_tp_sl(symbol, stop_loss=new_sl, position_idx=pos_idx)
+                old_sl = sl
+                pos_info["sl"] = new_sl
+                adjusted = True
+                logger.info(
+                    f"[{symbol}] SL 조정 (강도 {strength:.2f}): "
+                    f"{old_sl:.6f} → {new_sl:.6f} | {sl_reason}"
+                )
+                record_tp_sl_adjustment(
+                    symbol=symbol, side=side, adjust_type="sl",
+                    old_value=old_sl, new_value=new_sl,
+                    reason=sl_reason, signal_strength=strength,
+                    pnl_pct=unrealized_pct * 100, price_at_adjust=price,
+                    entry_price=entry,
+                )
+            except Exception as e:
+                logger.warning(f"[{symbol}] SL 조정 실패: {e}")
+
+        if adjusted:
+            pos_info["last_strength_adjust_time"] = now_str
+            pos_info["last_signal_strength"] = strength
 
     def _protect_position_for_daily_candle(self, symbol: str, pos_info: dict,
                                               price: float, entry: float,
@@ -580,6 +836,27 @@ class TradingBot:
             if direction == 0:
                 return
 
+            # v7.3: 최소 시그널 강도 필터 (0.65 미만 = 승률 0%, 데이터 기반)
+            MIN_SIGNAL_STRENGTH = 0.65
+            if strength < MIN_SIGNAL_STRENGTH:
+                logger.info(f"[{symbol}] 시그널 강도 부족 ({strength:.2f} < {MIN_SIGNAL_STRENGTH}) → 진입 스킵")
+                try:
+                    from data.storage import record_skipped_signal
+                    record_skipped_signal(
+                        symbol=symbol,
+                        side="long" if direction == 1 else "short",
+                        signal_strength=strength,
+                        skip_reason=f"strength_below_{MIN_SIGNAL_STRENGTH}",
+                        price=price,
+                        atr=atr,
+                        rsi=signal_data.get("rsi", 0),
+                        market_regime=signal_data.get("mode", ""),
+                        leverage=leverage,
+                    )
+                except Exception:
+                    pass
+                return
+
             side = "long" if direction == 1 else "short"
 
             # TP/SL 계산
@@ -611,6 +888,9 @@ class TradingBot:
                     "tp_atr_mult": tp_mult,
                     "sl_atr_mult": sl_mult,
                     "atr": atr,
+                    "rsi": signal_data.get("rsi", 0),
+                    "vol_ratio": signal_data.get("vol_ratio", 0),
+                    "h4_confirmed": signal_data.get("h4_confirmed", False),
                 })
 
             # 진입 실행 (v7.0: TP/SL 직접 전달 — ExitCondition 재계산 버그 방지)
@@ -903,6 +1183,38 @@ class TradingBot:
             from data.storage import get_paper_trade_analysis
             hours = int(request.args.get("hours", 168))
             return jsonify(get_paper_trade_analysis(hours))
+
+        @app.route("/tp-sl-adjustments")
+        def tp_sl_adjustments():
+            from data.storage import get_tp_sl_adjustment_analysis
+            hours = int(request.args.get("hours", 168))
+            return jsonify(get_tp_sl_adjustment_analysis(hours))
+
+        @app.route("/post-exit")
+        def post_exit():
+            from data.storage import get_post_exit_analysis
+            hours = int(request.args.get("hours", 168))
+            return jsonify(get_post_exit_analysis(hours))
+
+        @app.route("/skipped-signals")
+        def skipped_signals():
+            from data.storage import get_skipped_signals
+            hours = int(request.args.get("hours", 168))
+            signals = get_skipped_signals(hours)
+            # 요약 통계
+            by_reason = {}
+            by_symbol = {}
+            for s in signals:
+                reason = s.get("skip_reason", "unknown")
+                sym = s.get("symbol", "unknown")
+                by_reason[reason] = by_reason.get(reason, 0) + 1
+                by_symbol[sym] = by_symbol.get(sym, 0) + 1
+            return jsonify({
+                "total_skipped": len(signals),
+                "by_reason": by_reason,
+                "by_symbol": by_symbol,
+                "signals": signals[:50],  # 최근 50개만
+            })
 
         port = int(os.getenv("WEBHOOK_PORT", "5000"))
         t = threading.Thread(
