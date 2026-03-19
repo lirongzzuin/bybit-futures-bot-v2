@@ -158,7 +158,7 @@ TP 200%  → 2차 부분 익절 (추가 30% 청산)
 | 지표 | EMA, RSI, ADX/DMI, MACD, Bollinger Bands, 캔들패턴 |
 | 타임프레임 | 15분봉 진입, 4H 리샘플링 추세 확인 |
 | 인프라 | fly.io (도쿄), Docker |
-| 알림 | Slack Webhook |
+| 알림 | Telegram Bot API |
 | DB | SQLite (trades, paper_trades, daily_summary, tp_sl_adjustments, post_exit_tracking, skipped_signals) |
 
 ---
@@ -175,9 +175,10 @@ python main.py                    # 로컬 실행
 BYBIT_API_KEY=...
 BYBIT_API_SECRET=...
 BYBIT_TESTNET=false
+TELEGRAM_BOT_TOKEN=...          # Telegram 알림
+TELEGRAM_CHAT_ID=...
 PAPER_TRADING=false             # 실전 모드 (v7.4)
 PAPER_INITIAL_BALANCE=10000     # 페이퍼 모드 시 가상 자본
-SLACK_WEBHOOK_URL=...
 ```
 
 ### 모니터링 엔드포인트
@@ -204,6 +205,7 @@ SLACK_WEBHOOK_URL=...
 | 일봉 전환 보호 | KST 08:45~09:15 진입 차단 |
 | 주문 방식 | 지정가(Maker) 우선 (수수료 0.02%) |
 | 포지션당 마진 | 가용잔고의 최대 30% |
+| 미체결 주문 정리 | 재시작 시 고아 주문 자동 취소 |
 
 ---
 

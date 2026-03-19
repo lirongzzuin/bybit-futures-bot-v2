@@ -201,6 +201,44 @@ class TradingBot:
         except Exception as e:
             logger.error(f"  포지션 동기화 실패: {e}", exc_info=True)
 
+        # 미체결 지정가 주문 정리
+        self._cancel_orphan_orders()
+
+    def _cancel_orphan_orders(self):
+        """시작 시 미체결 지정가 주문 정리 — TP/SL 없이 체결되는 것 방지"""
+        try:
+            open_orders = self.client.get_open_orders()
+            if not open_orders:
+                logger.info("  미체결 주문 없음")
+                return
+
+            cancelled = 0
+            for order in open_orders:
+                symbol = order.get("symbol", "")
+                order_id = order.get("orderId", "")
+                side = order.get("side", "")
+                price = order.get("price", "")
+                order_type = order.get("orderType", "")
+
+                # TP/SL 조건부 주문은 유지 (stopOrder 등)
+                stop_type = order.get("stopOrderType", "")
+                if stop_type:
+                    logger.info(f"  [{symbol}] TP/SL 주문 유지: {stop_type} {side} @ {price}")
+                    continue
+
+                try:
+                    self.client.cancel_order(symbol, order_id)
+                    cancelled += 1
+                    logger.info(f"  [{symbol}] 미체결 주문 취소: {order_type} {side} @ {price} (ID: {order_id})")
+                except Exception as e:
+                    logger.error(f"  [{symbol}] 주문 취소 실패: {e}")
+
+            if cancelled:
+                logger.info(f"  미체결 주문 {cancelled}건 취소 완료")
+
+        except Exception as e:
+            logger.error(f"  미체결 주문 정리 실패: {e}", exc_info=True)
+
     @property
     def symbols(self):
         """모니터링 대상 심볼 = 전략 심볼 + 보유 포지션 심볼 (중복 제거)"""
@@ -1233,7 +1271,7 @@ class TradingBot:
 
         pos_list = list(self.risk.state.open_positions.keys())
         notify("봇 시작", (
-            f"Dual-Mode Adaptive v7.0 | {self.mode_str}\n"
+            f"Dual-Mode Adaptive v7.4 | {self.mode_str}\n"
             f"타임프레임: 15분봉 (4H 크로스검증)\n"
             f"모니터링: 거래량 상위 {len(self.strategy_symbols)}개 심볼\n"
             f"시장가 기준: 강도 >= {ORDER_TYPE_CONFIG['strong_signal_threshold']}\n"
