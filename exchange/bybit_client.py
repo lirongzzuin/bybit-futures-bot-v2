@@ -301,11 +301,13 @@ class BybitClient:
         return result["result"]
 
     @retry_on_error
-    def get_open_orders(self, symbol: str = None) -> list[dict]:
+    def get_open_orders(self, symbol: str = None, settle_coin: str = "USDT") -> list[dict]:
         """미체결 주문 조회"""
         params = {"category": "linear"}
         if symbol:
             params["symbol"] = symbol
+        else:
+            params["settleCoin"] = settle_coin
 
         result = self.session.get_open_orders(**params)
         if result["retCode"] != 0:

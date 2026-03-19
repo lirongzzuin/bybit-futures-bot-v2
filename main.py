@@ -205,7 +205,14 @@ class TradingBot:
         self._cancel_orphan_orders()
 
     def _cancel_orphan_orders(self):
-        """시작 시 미체결 지정가 주문 정리 — TP/SL 없이 체결되는 것 방지"""
+        """시작 시 미체결 지정가 주문 정리 — TP/SL 없이 체결되는 것 방지
+
+        보존 대상 (취소하지 않음):
+          - reduceOnly=True: 기존 포지션의 TP/SL 청산 주문
+          - stopOrderType 존재: 조건부 TP/SL 주문
+        취소 대상:
+          - 일반 지정가 진입 주문 (reduceOnly=False, stopOrderType 없음)
+        """
         try:
             open_orders = self.client.get_open_orders()
             if not open_orders:
@@ -213,6 +220,7 @@ class TradingBot:
                 return
 
             cancelled = 0
+            kept = 0
             for order in open_orders:
                 symbol = order.get("symbol", "")
                 order_id = order.get("orderId", "")
@@ -220,21 +228,29 @@ class TradingBot:
                 price = order.get("price", "")
                 order_type = order.get("orderType", "")
 
-                # TP/SL 조건부 주문은 유지 (stopOrder 등)
+                # TP/SL 조건부 주문 유지
                 stop_type = order.get("stopOrderType", "")
                 if stop_type:
+                    kept += 1
                     logger.info(f"  [{symbol}] TP/SL 주문 유지: {stop_type} {side} @ {price}")
                     continue
 
+                # reduceOnly 청산 주문 유지 (포지션 보호용)
+                reduce_only = order.get("reduceOnly", False)
+                if reduce_only:
+                    kept += 1
+                    logger.info(f"  [{symbol}] 청산 주문 유지: {order_type} {side} @ {price} (reduceOnly)")
+                    continue
+
+                # 일반 진입 주문 → 취소
                 try:
                     self.client.cancel_order(symbol, order_id)
                     cancelled += 1
-                    logger.info(f"  [{symbol}] 미체결 주문 취소: {order_type} {side} @ {price} (ID: {order_id})")
+                    logger.info(f"  [{symbol}] 미체결 진입 주문 취소: {order_type} {side} @ {price} (ID: {order_id})")
                 except Exception as e:
                     logger.error(f"  [{symbol}] 주문 취소 실패: {e}")
 
-            if cancelled:
-                logger.info(f"  미체결 주문 {cancelled}건 취소 완료")
+            logger.info(f"  미체결 주문 정리: {cancelled}건 취소 / {kept}건 유지 (TP/SL)")
 
         except Exception as e:
             logger.error(f"  미체결 주문 정리 실패: {e}", exc_info=True)
