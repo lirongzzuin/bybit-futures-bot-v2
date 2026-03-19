@@ -1,5 +1,5 @@
 """
-정기 브리핑 — 6시간 간격 Slack 리포트
+정기 브리핑 — 6시간 간격 Telegram 리포트
 KST 09:00 / 15:00 / 21:00 / 03:00 (UTC 00:00 / 06:00 / 12:00 / 18:00)
 """
 from datetime import datetime, timezone, timedelta
@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 from exchange.bybit_client import BybitClient
 from strategy.risk_manager import RiskManager
 from data.storage import get_recent_trades, get_trade_stats_since
-from utils.notifier import send_slack
+from utils.notifier import send_telegram
 from utils.logger import setup_logger
 
 logger = setup_logger("briefing")
@@ -126,7 +126,7 @@ def send_briefing(client: BybitClient, risk: RiskManager):
     """브리핑 생성 + Slack 전송"""
     try:
         body = build_briefing(client, risk)
-        send_slack("정기 브리핑", body, emoji="📋", level="info")
+        send_telegram("정기 브리핑", body, emoji="📋", level="info")
         logger.info("브리핑 전송 완료")
     except Exception as e:
         logger.error(f"브리핑 전송 실패: {e}", exc_info=True)
