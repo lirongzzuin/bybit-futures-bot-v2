@@ -5,18 +5,25 @@ Paper Trading Client — 실제 시장 데이터 + 가상 주문 실행
 - 시장 데이터 (get_ticker, get_klines, get_instrument_info 등) → 실제 API 사용
 - 주문/포지션/잔고 → 가상으로 시뮬레이션
 - TP/SL 체결 → monitor()에서 실시간 가격 체크로 감지
+- 재시작 시 DB에서 상태 복원 (포지션, 잔고 유지)
 """
+import json
 import time
 import uuid
 from typing import Optional
 from datetime import datetime, timezone
 
 from exchange.bybit_client import BybitClient
-from data.storage import record_paper_trade
+from data.storage import record_paper_trade, get_state, set_state
 from utils.logger import setup_logger
 from utils.notifier import notify
 
 logger = setup_logger("paper")
+
+_STATE_KEY_POSITIONS = "paper_positions"
+_STATE_KEY_ORDERS = "paper_orders"
+_STATE_KEY_BALANCE = "paper_balance"
+_STATE_KEY_STATS = "paper_stats"
 
 
 class PaperBybitClient(BybitClient):
@@ -49,7 +56,89 @@ class PaperBybitClient(BybitClient):
         # 심볼별 레버리지 저장
         self._leverage_map: dict = {}
 
-        logger.info(f"📋 페이퍼 트레이딩 모드 | 초기 잔고: ${initial_balance:.2f}")
+        # DB에서 상태 복원
+        self._restore_state()
+
+        logger.info(f"📋 페이퍼 트레이딩 모드 | 잔고: ${self._paper_balance:.2f} | 포지션: {len(self._paper_positions)}개")
+
+    # ── 상태 저장/복원 (재시작 대응) ──
+
+    def _save_state(self):
+        """현재 상태를 DB에 저장 (포지션, 주문, 잔고)"""
+        try:
+            # 포지션 저장 (datetime 객체 제거)
+            positions_clean = {}
+            for sym, p in self._paper_positions.items():
+                pos_copy = {k: v for k, v in p.items() if k != "signal_info"}
+                positions_clean[sym] = pos_copy
+            set_state(_STATE_KEY_POSITIONS, json.dumps(positions_clean))
+
+            # 미체결 주문 저장 (datetime 변환)
+            orders_clean = {}
+            for oid, o in self._paper_orders.items():
+                o_copy = dict(o)
+                if "created_at" in o_copy:
+                    o_copy["created_at"] = o_copy["created_at"].isoformat() if hasattr(o_copy["created_at"], "isoformat") else str(o_copy["created_at"])
+                o_copy.pop("signal_info", None)
+                orders_clean[oid] = o_copy
+            set_state(_STATE_KEY_ORDERS, json.dumps(orders_clean))
+
+            # 잔고 + 통계 저장
+            set_state(_STATE_KEY_BALANCE, json.dumps({
+                "balance": self._paper_balance,
+                "initial": self._paper_initial,
+            }))
+            set_state(_STATE_KEY_STATS, json.dumps({
+                "realized_pnl": self._total_realized_pnl,
+                "total_fees": self._total_fees,
+                "trade_count": len(self._paper_trades),
+            }))
+        except Exception as e:
+            logger.warning(f"[PAPER] 상태 저장 실패: {e}")
+
+    def _restore_state(self):
+        """DB에서 이전 상태 복원"""
+        try:
+            # 잔고 복원
+            bal_json = get_state(_STATE_KEY_BALANCE)
+            if bal_json:
+                bal = json.loads(bal_json)
+                self._paper_balance = bal.get("balance", self._paper_balance)
+                self._paper_initial = bal.get("initial", self._paper_initial)
+                logger.info(f"[PAPER] 잔고 복원: ${self._paper_balance:.2f}")
+
+            # 통계 복원
+            stats_json = get_state(_STATE_KEY_STATS)
+            if stats_json:
+                stats = json.loads(stats_json)
+                self._total_realized_pnl = stats.get("realized_pnl", 0)
+                self._total_fees = stats.get("total_fees", 0)
+
+            # 포지션 복원
+            pos_json = get_state(_STATE_KEY_POSITIONS)
+            if pos_json:
+                self._paper_positions = json.loads(pos_json)
+                if self._paper_positions:
+                    symbols = list(self._paper_positions.keys())
+                    logger.info(f"[PAPER] 포지션 복원: {len(symbols)}개 {symbols}")
+
+            # 미체결 주문 복원
+            ord_json = get_state(_STATE_KEY_ORDERS)
+            if ord_json:
+                orders = json.loads(ord_json)
+                for oid, o in orders.items():
+                    if "created_at" in o and isinstance(o["created_at"], str):
+                        try:
+                            o["created_at"] = datetime.fromisoformat(o["created_at"])
+                        except Exception:
+                            o["created_at"] = datetime.now(timezone.utc)
+                    o.setdefault("signal_info", {})
+                    self._paper_orders[oid] = o
+                if self._paper_orders:
+                    logger.info(f"[PAPER] 미체결 주문 복원: {len(self._paper_orders)}개")
+
+        except Exception as e:
+            logger.warning(f"[PAPER] 상태 복원 실패 (신규 시작): {e}")
 
     # ── 잔고 (가상) ──
 
@@ -111,13 +200,12 @@ class PaperBybitClient(BybitClient):
             fill_price = 0
 
         if reduce_only:
-            # 청산 주문 처리
             self._close_paper_position(symbol, side, qty, fill_price, exit_reason="market_close")
         else:
-            # 신규 진입 (시그널 정보 첨부)
             sig = self._pending_signal_info.pop(symbol, {})
             self._open_paper_position(symbol, side, qty, fill_price, signal_info=sig)
 
+        self._save_state()
         logger.info(f"[PAPER] [{symbol}] 시장가 {side} {qty} @ {fill_price:.2f} (ID: {order_id})")
         return {"order_id": order_id, "symbol": symbol, "side": side, "qty": qty}
 
@@ -138,6 +226,7 @@ class PaperBybitClient(BybitClient):
             "signal_info": sig,
         }
 
+        self._save_state()
         logger.info(f"[PAPER] [{symbol}] 지정가 {side} {qty} @ {price:.2f} (ID: {order_id})")
         return {"order_id": order_id, "symbol": symbol, "side": side, "qty": qty, "price": price}
 
@@ -149,6 +238,7 @@ class PaperBybitClient(BybitClient):
                 self._paper_positions[symbol]["take_profit"] = take_profit
             if stop_loss is not None:
                 self._paper_positions[symbol]["stop_loss"] = stop_loss
+            self._save_state()
             logger.info(f"[PAPER] [{symbol}] TP: {take_profit}, SL: {stop_loss}")
         return {}
 
@@ -156,6 +246,7 @@ class PaperBybitClient(BybitClient):
         """가상 주문 취소"""
         if order_id in self._paper_orders:
             del self._paper_orders[order_id]
+            self._save_state()
             logger.info(f"[PAPER] [{symbol}] 주문 취소: {order_id}")
         return {}
 
@@ -165,6 +256,7 @@ class PaperBybitClient(BybitClient):
         for oid in to_remove:
             del self._paper_orders[oid]
         if to_remove:
+            self._save_state()
             logger.info(f"[PAPER] [{symbol}] {len(to_remove)}개 주문 취소")
         return {}
 
@@ -193,7 +285,7 @@ class PaperBybitClient(BybitClient):
     def _open_paper_position(self, symbol: str, side: str, qty: float, price: float,
                              signal_info: dict = None):
         """가상 포지션 오픈"""
-        lev = self._leverage_map.get(symbol, 15)
+        lev = self._leverage_map.get(symbol, 10)
         self._paper_positions[symbol] = {
             "side": side,
             "size": qty,
@@ -292,6 +384,7 @@ class PaperBybitClient(BybitClient):
         실시간 가격 체크 → TP/SL 체결 시뮬레이션
         main.py의 monitor()에서 주기적으로 호출
         """
+        state_changed = False
         for symbol in list(self._paper_positions.keys()):
             pos = self._paper_positions.get(symbol)
             if not pos:
@@ -332,11 +425,16 @@ class PaperBybitClient(BybitClient):
                 exit_price = sl if reason == "stop_loss" else tp
                 logger.info(f"[PAPER] [{symbol}] {reason.upper()} 체결! @ {exit_price:.2f}")
                 self._close_paper_position(symbol, pos["side"], pos["size"], exit_price, exit_reason=reason)
+                state_changed = True
+
+        if state_changed:
+            self._save_state()
 
     def check_limit_fills(self):
         """
         미체결 지정가 주문 체결 체크
         """
+        state_changed = False
         for order_id in list(self._paper_orders.keys()):
             order = self._paper_orders.get(order_id)
             if not order:
@@ -366,6 +464,10 @@ class PaperBybitClient(BybitClient):
                                               signal_info=order.get("signal_info", {}))
 
                 del self._paper_orders[order_id]
+                state_changed = True
+
+        if state_changed:
+            self._save_state()
 
     def get_paper_summary(self) -> str:
         """페이퍼 트레이딩 요약"""
