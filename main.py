@@ -211,18 +211,20 @@ class TradingBot:
         return all_symbols
 
     def _handle_shutdown(self, signum, frame):
-        """종료 시그널 처리 (SIGTERM, SIGINT)"""
+        """종료 시그널 처리 (SIGTERM, SIGINT) — 배포 시 Slack 폭주 방지"""
         sig_name = signal.Signals(signum).name
         logger.warning(f"종료 시그널 수신: {sig_name}")
         self.running = False
 
+        # 배포 시 종료+시작 연속 전송으로 인한 Slack 429 방지
+        from utils.notifier import suppress_shutdown_messages
+        suppress_shutdown_messages()
+
         pos_list = list(self.risk.state.open_positions.keys())
-        notify("봇 종료", (
-            f"종료 시그널: {sig_name}\n"
-            f"시각: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
-            f"보유 포지션: {len(pos_list)}개 {pos_list}\n"
-            f"서버사이드 TP/SL은 유지됩니다"
-        ), level="error")
+        logger.warning(
+            f"봇 종료 — {sig_name} | 포지션: {len(pos_list)}개 {pos_list} | "
+            f"서버사이드 TP/SL 유지됨"
+        )
 
     def fetch_data(self, symbol: str, limit: int = 500) -> pd.DataFrame:
         """최신 15분 OHLCV 데이터 수집 (4H 리샘플링을 위해 충분한 양 필요)"""
@@ -1280,12 +1282,11 @@ class TradingBot:
 
                 time.sleep(60)
 
-        # 정상 종료 처리
-        logger.info("봇 종료")
-        notify("봇 종료 완료", (
-            f"시각: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
-            f"보유 포지션: {len(self.risk.state.open_positions)}개"
-        ), level="warning")
+        # 정상 종료 처리 (Slack 알림 없음 — 배포 시 429 방지)
+        logger.info(
+            f"봇 종료 완료 | 포지션: {len(self.risk.state.open_positions)}개 | "
+            f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"
+        )
 
 
 if __name__ == "__main__":
