@@ -488,25 +488,32 @@ class TradingBot:
             self._symbol_cooldown[symbol] = datetime.now(timezone.utc) + timedelta(minutes=self.COOLDOWN_MINUTES)
             return
 
-        # === Stage 1: 본전 보호 (수익 1%+) ===
+        # === Stage 1: 본전 보호 (수익 1%+) — 수수료 반영 ===
+        # SL 체결 시 Taker 수수료(0.055%) + 진입 Maker 수수료(0.02%) = 총 0.075%
+        # 본전 SL = 진입가 + 왕복 수수료분 (순손실 제로 보장)
         if unrealized_pct >= 0.01 and not pos_info.get("breakeven_set"):
-            be_sl = self.client.round_price(symbol, entry)
-            if side == "long" and (sl < entry or sl == 0):
+            fee_offset = entry * 0.00075  # 왕복 수수료 0.075%
+            if side == "long":
+                be_sl = self.client.round_price(symbol, entry + fee_offset)
+            else:
+                be_sl = self.client.round_price(symbol, entry - fee_offset)
+
+            if side == "long" and (sl < be_sl or sl == 0):
                 try:
                     self.client.set_tp_sl(symbol, stop_loss=be_sl, position_idx=pos_idx)
                     pos_info["sl"] = be_sl
                     pos_info["breakeven_set"] = True
                     sl = be_sl
-                    logger.info(f"[{symbol}] 본전 SL 설정 (수익 {unrealized_pct:.1%})")
+                    logger.info(f"[{symbol}] 본전 SL 설정 — 수수료 반영 (수익 {unrealized_pct:.1%})")
                 except Exception:
                     pass
-            elif side == "short" and (sl > entry or sl == 0):
+            elif side == "short" and (sl > be_sl or sl == 0):
                 try:
                     self.client.set_tp_sl(symbol, stop_loss=be_sl, position_idx=pos_idx)
                     pos_info["sl"] = be_sl
                     pos_info["breakeven_set"] = True
                     sl = be_sl
-                    logger.info(f"[{symbol}] 본전 SL 설정 (수익 {unrealized_pct:.1%})")
+                    logger.info(f"[{symbol}] 본전 SL 설정 — 수수료 반영 (수익 {unrealized_pct:.1%})")
                 except Exception:
                     pass
 
@@ -1307,7 +1314,7 @@ class TradingBot:
 
         pos_list = list(self.risk.state.open_positions.keys())
         notify("봇 시작", (
-            f"Dual-Mode Adaptive v7.4 | {self.mode_str}\n"
+            f"Dual-Mode Adaptive v7.5 | {self.mode_str}\n"
             f"타임프레임: 15분봉 (4H 크로스검증)\n"
             f"모니터링: 거래량 상위 {len(self.strategy_symbols)}개 심볼\n"
             f"시장가 기준: 강도 >= {ORDER_TYPE_CONFIG['strong_signal_threshold']}\n"
