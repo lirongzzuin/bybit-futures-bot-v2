@@ -123,11 +123,12 @@ class OrderManager:
                         note="order_type: limit",
                     )
 
-                    notify("포지션 진입 (지정가)", (
-                        f"심볼: {symbol}\n방향: {side.upper()}\n"
-                        f"가격: {_fmt_price(entry_price)}\n수량: {qty}\n"
-                        f"TP: {_fmt_price(tp)} / SL: {_fmt_price(sl)}\n등급: {signal_grade}\n"
-                        f"수수료: {fee_amount:.4f} USDT (Maker {FEES['maker']*100:.3f}%)"
+                    side_emoji = "🟢 LONG" if side == "long" else "🔴 SHORT"
+                    notify("📥 포지션 진입 (지정가)", (
+                        f"<b>{side_emoji}</b> <code>{symbol}</code>\n"
+                        f"💰 가격: <code>{_fmt_price(entry_price)}</code> | 수량: <code>{qty}</code>\n"
+                        f"🎯 TP: <code>{_fmt_price(tp)}</code> | 🛑 SL: <code>{_fmt_price(sl)}</code>\n"
+                        f"📊 등급: {signal_grade} | 수수료: {fee_amount:.4f} USDT"
                     ), level="trade")
                     return
 
@@ -265,11 +266,12 @@ class OrderManager:
                 ep = _fmt_price(entry_price)
                 tp_s = _fmt_price(tp)
                 sl_s = _fmt_price(sl)
-                notify("포지션 진입 (시장가)", (
-                    f"심볼: {symbol}\n방향: {side.upper()}\n"
-                    f"가격: {ep}\n수량: {qty}\n"
-                    f"TP: {tp_s} / SL: {sl_s}\n등급: {signal_grade}\n"
-                    f"수수료: {fee_amount:.4f} USDT (Taker {FEES['taker']*100:.3f}%)"
+                side_emoji = "🟢 LONG" if side == "long" else "🔴 SHORT"
+                notify("⚡ 포지션 진입 (시장가)", (
+                    f"<b>{side_emoji}</b> <code>{symbol}</code>\n"
+                    f"💰 가격: <code>{ep}</code> | 수량: <code>{qty}</code>\n"
+                    f"🎯 TP: <code>{tp_s}</code> | 🛑 SL: <code>{sl_s}</code>\n"
+                    f"📊 등급: {signal_grade} | 수수료: {fee_amount:.4f} USDT"
                 ), level="trade")
 
                 return {
@@ -349,13 +351,16 @@ class OrderManager:
                 note=f"exit_reason: {reason} | net_pnl: {net_pnl:.4f}",
             )
 
-            pnl_emoji = "🟢" if net_pnl > 0 else "🔴"
-            notify("포지션 청산", (
-                f"{pnl_emoji} {symbol}\n"
-                f"PnL: {pnl:.4f} USDT\n"
-                f"수수료: {fee_amount:.4f} USDT\n"
-                f"순 PnL: {net_pnl:.4f} USDT\n"
-                f"사유: {reason}"
+            if net_pnl > 0:
+                pnl_emoji = "✅"
+                title = "📤 익절 청산"
+            else:
+                pnl_emoji = "❌"
+                title = "📤 손절 청산"
+            notify(title, (
+                f"{pnl_emoji} <code>{symbol}</code>\n"
+                f"💵 PnL: <b>{net_pnl:+.4f} USDT</b>\n"
+                f"📋 사유: {reason}"
             ), level="trade")
 
             return {"symbol": symbol, "pnl": pnl, "net_pnl": net_pnl,
@@ -408,11 +413,10 @@ class OrderManager:
             logger.info(f"[{symbol}] 부분 익절 {close_ratio*100:.0f}% — "
                         f"청산: {close_qty}, 잔여: {remaining_qty}")
 
-            notify("부분 익절", (
-                f"심볼: {symbol}\n"
-                f"청산: {close_qty} ({close_ratio*100:.0f}%)\n"
-                f"잔여: {remaining_qty}\n"
-                f"사유: {reason}"
+            notify("✂️ 부분 익절", (
+                f"<code>{symbol}</code>\n"
+                f"📊 청산: <code>{close_qty}</code> ({close_ratio*100:.0f}%) | 잔여: <code>{remaining_qty}</code>\n"
+                f"📋 사유: {reason}"
             ), level="trade")
 
             return {"symbol": symbol, "closed_qty": close_qty, "remaining": remaining_qty}

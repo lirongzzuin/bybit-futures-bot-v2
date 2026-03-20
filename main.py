@@ -92,6 +92,10 @@ class TradingBot:
         self.safe_mode = False
         self.running = True
 
+        # v7.5: 동일 심볼 재진입 쿨다운 (15분)
+        self._symbol_cooldown: dict[str, datetime] = {}
+        self.COOLDOWN_MINUTES = 15
+
         # 시작 시 기존 포지션 동기화
         if self.paper_mode:
             self._sync_paper_positions()
@@ -376,6 +380,7 @@ class TradingBot:
                 if is_reverse and strength >= 0.65:
                     logger.info(f"[{symbol}] 강한 반대 시그널 (강도 {strength:.2f}) → 청산")
                     self.order_mgr.execute_exit(symbol, reason="reverse_signal")
+                    self._symbol_cooldown[symbol] = datetime.now(timezone.utc) + timedelta(minutes=self.COOLDOWN_MINUTES)
                     return
                 elif is_reverse:
                     logger.debug(f"[{symbol}] 약한 반대 시그널 (강도 {strength:.2f}) → 무시")
@@ -413,6 +418,7 @@ class TradingBot:
                                         f"수익 {unrealized_pct:.1%} → 시장가 익절")
                                     self.order_mgr.execute_exit(
                                         symbol, reason=f"rsi_reversal_{r_now:.0f}")
+                                    self._symbol_cooldown[symbol] = datetime.now(timezone.utc) + timedelta(minutes=self.COOLDOWN_MINUTES)
                                     return
                                 # 숏: RSI < 22 + 3봉 연속 상승 (확실한 꺾임)
                                 elif (side == "short" and r_now < 22 and
@@ -423,6 +429,7 @@ class TradingBot:
                                         f"수익 {unrealized_pct:.1%} → 시장가 익절")
                                     self.order_mgr.execute_exit(
                                         symbol, reason=f"rsi_reversal_{r_now:.0f}")
+                                    self._symbol_cooldown[symbol] = datetime.now(timezone.utc) + timedelta(minutes=self.COOLDOWN_MINUTES)
                                     return
                 except Exception:
                     pass
@@ -478,6 +485,7 @@ class TradingBot:
         if unrealized_pct <= -0.08:
             logger.warning(f"[{symbol}] 급락! 손실 {unrealized_pct:.1%} → 긴급 청산")
             self.order_mgr.execute_exit(symbol, reason=f"emergency_{unrealized_pct:.1%}")
+            self._symbol_cooldown[symbol] = datetime.now(timezone.utc) + timedelta(minutes=self.COOLDOWN_MINUTES)
             return
 
         # === Stage 1: 본전 보호 (수익 1%+) ===
@@ -892,8 +900,15 @@ class TradingBot:
             if direction == 0:
                 return
 
-            # v7.3: 최소 시그널 강도 필터 (0.65 미만 = 승률 0%, 데이터 기반)
-            MIN_SIGNAL_STRENGTH = 0.65
+            # v7.5: 동일 심볼 재진입 쿨다운 (15분)
+            cooldown_until = self._symbol_cooldown.get(symbol)
+            if cooldown_until and datetime.now(timezone.utc) < cooldown_until:
+                remaining = (cooldown_until - datetime.now(timezone.utc)).seconds // 60
+                logger.info(f"[{symbol}] 재진입 쿨다운 중 ({remaining}분 남음) → 진입 스킵")
+                return
+
+            # v7.5: 최소 시그널 강도 필터 (실거래 데이터 기반 — 0.65~0.70 승률 저조)
+            MIN_SIGNAL_STRENGTH = 0.75
             if strength < MIN_SIGNAL_STRENGTH:
                 logger.info(f"[{symbol}] 시그널 강도 부족 ({strength:.2f} < {MIN_SIGNAL_STRENGTH}) → 진입 스킵")
                 try:
@@ -1010,7 +1025,7 @@ class TradingBot:
                         else:
                             estimated_pnl = (entry_price - current_price) * qty
 
-                        pnl_emoji = "+" if estimated_pnl >= 0 else "-"
+                        pnl_emoji = "✅" if estimated_pnl >= 0 else "❌"
                         reason = "TP 체결 (추정)" if estimated_pnl >= 0 else "SL 체결 (추정)"
                     except Exception:
                         pass
@@ -1021,6 +1036,9 @@ class TradingBot:
                     del self.risk.state.open_positions[symbol]
                     self.risk.update_on_trade_close(estimated_pnl)
 
+                    # v7.5: 재진입 쿨다운 설정
+                    self._symbol_cooldown[symbol] = datetime.now(timezone.utc) + timedelta(minutes=self.COOLDOWN_MINUTES)
+
                     # DB 기록
                     record_trade(
                         symbol=symbol, side=side, action="close",
@@ -1030,14 +1048,16 @@ class TradingBot:
                         note=f"exit_reason: {reason} (server-side)",
                     )
 
-                    # 슬랙 알림
                     from exchange.order_manager import _fmt_price
-                    notify("포지션 청산 (서버사이드)", (
-                        f"{pnl_emoji} {symbol}\n"
-                        f"방향: {side.upper()}\n"
-                        f"진입가: {_fmt_price(entry_price)}\n"
-                        f"추정 PnL: {estimated_pnl:+.4f} USDT\n"
-                        f"사유: {reason}"
+                    if estimated_pnl >= 0:
+                        title = "🎯 익절 체결"
+                    else:
+                        title = "🛑 손절 체결"
+                    side_emoji = "🟢" if side == "long" else "🔴"
+                    notify(title, (
+                        f"{pnl_emoji} <code>{symbol}</code> {side_emoji} {side.upper()}\n"
+                        f"💵 PnL: <b>{estimated_pnl:+.4f} USDT</b>\n"
+                        f"📋 {reason}"
                     ), level="trade")
 
             # Bybit에 있지만 내부 상태에 없는 포지션 = 외부 진입 또는 누락
