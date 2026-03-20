@@ -914,9 +914,9 @@ class TradingBot:
                 logger.info(f"[{symbol}] 재진입 쿨다운 중 ({remaining}분 남음) → 진입 스킵")
                 return
 
-            # v7.5: 최소 시그널 강도 필터 (실거래 데이터 기반 — 0.65~0.70 승률 저조)
+            # v7.5: 최소 시그널 강도 필터 (실거래 데이터 기반 — 0.75 이하 승률 저조)
             MIN_SIGNAL_STRENGTH = 0.75
-            if strength < MIN_SIGNAL_STRENGTH:
+            if strength <= MIN_SIGNAL_STRENGTH:
                 logger.info(f"[{symbol}] 시그널 강도 부족 ({strength:.2f} < {MIN_SIGNAL_STRENGTH}) → 진입 스킵")
                 try:
                     from data.storage import record_skipped_signal
