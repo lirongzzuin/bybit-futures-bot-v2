@@ -31,24 +31,24 @@ OPTIMAL_PARAMS = {
     "adx_trend_threshold": 25,
     "adx_range_threshold": 20,
     # TREND-FOLLOWING mode (ADX >= 25)
-    "tf_tp_atr_mult": 3.0,          # keep 3.0 — backtest optimal; live issue is management exits
-    "tf_sl_atr_mult": 2.0,          # restored — 1.5 caused excessive stop-outs in choppy markets
+    "tf_tp_atr_mult": 2.0,          # was 3.0 — 실거래 데이터: TP 너무 멀어 SL 먼저 체결 (v7.5)
+    "tf_sl_atr_mult": 1.5,          # was 2.0 — 손실 크기 제한 (v7.5)
     "tf_leverage": 10,               # was 15 — reduce SL loss from ~$335 to ~$220 per trade
     "tf_cooldown": 6,                # proven
     "tf_min_score": 2.0,             # proven
     "tf_use_trailing": True,
-    "tf_trailing_atr_mult": 2.0,
+    "tf_trailing_atr_mult": 1.5,     # was 2.0 — TP 축소에 맞춰 조정 (v7.5)
     # MEAN-REVERSION mode (ADX < 20)
-    "mr_tp_atr_mult": 1.5,          # tight TP for quick scalps (proven)
-    "mr_sl_atr_mult": 1.0,          # tight SL
+    "mr_tp_atr_mult": 1.2,          # was 1.5 — TP 더 가깝게 → 체결률 향상 (v7.5)
+    "mr_sl_atr_mult": 0.8,          # was 1.0 — 손실 제한 (v7.5)
     "mr_leverage": 10,               # was 15 — reduced to limit SL impact (v7.2)
     "mr_cooldown": 4,                # proven
     "mr_min_score": 1.5,             # proven
     "mr_rsi_oversold": 30,           # proven
     "mr_rsi_overbought": 70,         # proven
     # TRANSITION mode (ADX 20-25)
-    "tr_tp_atr_mult": 1.8,          # was 2.0 — tighter
-    "tr_sl_atr_mult": 1.5,          # restored — 1.2 too tight for transition zone
+    "tr_tp_atr_mult": 1.4,          # was 1.8 — TP 가깝게 (v7.5)
+    "tr_sl_atr_mult": 1.2,          # was 1.5 — SL 타이트 (v7.5)
     "tr_leverage": 10,               # was 15 — reduced to limit SL impact (v7.2)
     "tr_cooldown": 6,                # proven
     "tr_min_score": 2.5,             # proven (strict)

@@ -92,9 +92,9 @@ class TradingBot:
         self.safe_mode = False
         self.running = True
 
-        # v7.5: 동일 심볼 재진입 쿨다운 (15분)
+        # v7.5: 동일 심볼 재진입 쿨다운 (30분)
         self._symbol_cooldown: dict[str, datetime] = {}
-        self.COOLDOWN_MINUTES = 15
+        self.COOLDOWN_MINUTES = 30
 
         # 시작 시 기존 포지션 동기화
         if self.paper_mode:
@@ -556,14 +556,7 @@ class TradingBot:
                     except Exception:
                         pass
 
-        # === Stage 2.5: 조기 부분 익절 (TP 30% 도달, 25% 청산) — v7.4 MFE 누수 방지 ===
-        if tp_progress >= 0.3 and not pos_info.get("partial_early_done"):
-            logger.info(f"[{symbol}] TP 진행 {tp_progress:.0%} → 조기 부분 익절 (25%)")
-            self.order_mgr.execute_partial_close(
-                symbol, close_ratio=0.25,
-                reason=f"partial_early (진행 {tp_progress:.0%}, 수익 {unrealized_pct:.1%})"
-            )
-            pos_info["partial_early_done"] = True
+        # === Stage 2.5 제거 (v7.5) — TP 축소로 조기 부분 익절 불필요 ===
 
         # === Stage 3: 1차 부분 익절 (TP 60% 도달, 30% 청산) ===
         if tp_progress >= 0.6 and not pos_info.get("partial_1_done"):
@@ -613,18 +606,17 @@ class TradingBot:
         unrealized_pct: float, pos_info: dict, pos_idx: int
     ):
         """
-        v7.3: 시그널 강도 기반 TP/SL 실시간 조정
+        v7.5: 시그널 강도 기반 TP/SL 실시간 조정 (ATR 배수 축소)
 
         강도 구간별 행동:
-        - 0.9+ (매우 강함): TP 확대 (ATR×4.0), SL 여유 (ATR×2.5) → 큰 수익 기회 극대화
-        - 0.8+ (강함):      TP 확대 (ATR×3.5), SL 여유 (ATR×2.2) → 수익 기회 확대
-        - 0.7+ (보통):      TP 유지, SL 유지 → 기본 전략 유지
-        - 0.65+ (약함):     TP 축소 (ATR×2.0), SL 타이트 (ATR×1.5) → 빠른 익절/손절
+        - 0.9+ (매우 강함): TP ATR×2.5, SL ATR×1.8 → 수익 기회 확대
+        - 0.8+ (강함):      TP ATR×2.2, SL ATR×1.5 → 수익 확대
+        - 0.7+ (보통):      TP ATR×2.0, SL ATR×1.5 → 기본 유지
+        - 0.65+ (약함):     TP ATR×1.5, SL ATR×1.2 → 빠른 익절/손절
 
         추가 규칙:
-        - 수익 중 + 강한 시그널 → TP 확대 (수익 달리게)
+        - 수익 중 + 강한 시그널 → TP 소폭 확대
         - 수익 중 + 약한 시그널 → SL 타이트닝 (수익 보호)
-        - 손실 중 + 강한 시그널 → SL 여유 (회복 기회)
         - 손실 중 + 약한 시그널 → 빠른 손절 유도
         """
         from data.storage import record_tp_sl_adjustment
@@ -654,21 +646,21 @@ class TradingBot:
         if tp > 0:
             # 강도별 TP ATR 배수 결정
             if strength >= 0.9:
-                tp_atr_mult = 4.0   # 매우 강함 → 큰 수익 기회
+                tp_atr_mult = 2.5   # 매우 강함 → 수익 기회 확대 (v7.5: was 4.0)
                 tp_reason = "very_strong_signal"
             elif strength >= 0.8:
-                tp_atr_mult = 3.5   # 강함 → 확대
+                tp_atr_mult = 2.2   # 강함 → 확대 (v7.5: was 3.5)
                 tp_reason = "strong_signal"
             elif strength >= 0.7:
-                tp_atr_mult = 3.0   # 보통 → 기본
+                tp_atr_mult = 2.0   # 보통 → 기본 (v7.5: was 3.0)
                 tp_reason = "normal_signal"
             else:
-                tp_atr_mult = 2.0   # 약함 → 빠른 익절
+                tp_atr_mult = 1.5   # 약함 → 빠른 익절 (v7.5: was 2.0)
                 tp_reason = "weak_signal"
 
-            # 수익 중이면 TP를 더 공격적으로
+            # 수익 중이면 TP를 소폭 확대
             if unrealized_pct > 0.02 and strength >= 0.8:
-                tp_atr_mult += 0.5  # 수익 + 강한 시그널 → 추가 확대
+                tp_atr_mult += 0.3  # 수익 + 강한 시그널 → 소폭 확대 (v7.5: was 0.5)
                 tp_reason += "+profitable"
 
             if side == "long":
@@ -714,27 +706,24 @@ class TradingBot:
         # === SL 조정 ===
         # 강도별 SL ATR 배수 결정
         if strength >= 0.9:
-            sl_atr_mult = 2.5    # 매우 강함 → SL 여유
+            sl_atr_mult = 1.8    # 매우 강함 → 약간 여유 (v7.5: was 2.5)
             sl_reason = "very_strong_signal"
         elif strength >= 0.8:
-            sl_atr_mult = 2.2    # 강함 → 약간 여유
+            sl_atr_mult = 1.5    # 강함 (v7.5: was 2.2)
             sl_reason = "strong_signal"
         elif strength >= 0.7:
-            sl_atr_mult = 2.0    # 보통 → 기본
+            sl_atr_mult = 1.5    # 보통 (v7.5: was 2.0)
             sl_reason = "normal_signal"
         else:
-            sl_atr_mult = 1.5    # 약함 → 타이트
+            sl_atr_mult = 1.2    # 약함 → 타이트 (v7.5: was 1.5)
             sl_reason = "weak_signal"
 
         # 수익 중 + 약한 시그널 → SL 더 타이트 (수익 보호)
         if unrealized_pct > 0.02 and strength < 0.7:
-            sl_atr_mult = 1.2
+            sl_atr_mult = 1.0
             sl_reason = "weak_signal+protect_profit"
 
-        # 손실 중 + 강한 시그널 → SL 여유 (회복 기회)
-        if unrealized_pct < -0.01 and strength >= 0.8:
-            sl_atr_mult = 2.5
-            sl_reason = "strong_signal+recovery_room"
+        # v7.5: recovery room 제거 — 손실 중 SL 넓히기는 손실만 키움
 
         if side == "long":
             new_sl = price - atr * sl_atr_mult
@@ -914,9 +903,9 @@ class TradingBot:
                 logger.info(f"[{symbol}] 재진입 쿨다운 중 ({remaining}분 남음) → 진입 스킵")
                 return
 
-            # v7.5: 최소 시그널 강도 필터 (실거래 데이터 기반 — 0.75 이하 승률 저조)
-            MIN_SIGNAL_STRENGTH = 0.75
-            if strength <= MIN_SIGNAL_STRENGTH:
+            # v7.5: 최소 시그널 강도 필터 (노이즈 제거용 — 강도와 승률 무상관 확인됨)
+            MIN_SIGNAL_STRENGTH = 0.65
+            if strength < MIN_SIGNAL_STRENGTH:
                 logger.info(f"[{symbol}] 시그널 강도 부족 ({strength:.2f} < {MIN_SIGNAL_STRENGTH}) → 진입 스킵")
                 try:
                     from data.storage import record_skipped_signal
