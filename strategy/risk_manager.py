@@ -145,18 +145,18 @@ class RiskManager:
         leverage = leverage or TRADING["default_leverage"]
         leverage = min(leverage, TRADING["max_leverage"])
 
-        # v7.4: 실전 복리 성장 — 공격적이되 실전 안정성 확보
+        # v7.6: 리스크 축소 — 데이터: 작은 포지션이 WR 높음
         # 잔고 대비 실질 리스크 (레버리지 감안 후 잔고 대비 실제 손실 비율)
         if balance < 1000:
-            target_actual = 0.12    # 소액: 실질 12% (was 15%)
+            target_actual = 0.08    # 소액: 실질 8% (was 12%)
         elif balance < 5000:
-            target_actual = 0.10   # 실질 10% (was 12%)
+            target_actual = 0.06   # 실질 6% (was 10%)
         elif balance < 20000:
-            target_actual = 0.08   # 실질 8% (was 10%)
+            target_actual = 0.05   # 실질 5% (was 8%)
         elif balance < 50000:
-            target_actual = 0.06   # 실질 6% (was 8%)
+            target_actual = 0.04   # 실질 4% (was 6%)
         else:
-            target_actual = 0.05   # 대액: 실질 5% (was 6%)
+            target_actual = 0.03   # 대액: 실질 3% (was 5%)
 
         risk_pct = target_actual / leverage  # 레버리지 역산
 

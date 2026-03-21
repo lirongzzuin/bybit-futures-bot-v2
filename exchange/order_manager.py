@@ -65,6 +65,7 @@ class OrderManager:
     def _reserve_position_slot(self, symbol: str, side: str, entry_price: float,
                                 qty: float, tp: float, sl: float, status: str = "active"):
         """포지션 슬롯 즉시 예약 (제한 우회 방지)"""
+        from datetime import datetime, timezone
         with self._pending_lock:
             self.risk.state.open_positions[symbol] = {
                 "side": side,
@@ -75,6 +76,7 @@ class OrderManager:
                 "sl": sl,
                 "status": status,       # "pending" / "active" / "partial_closed"
                 "partial_tp_done": False,
+                "entry_time": datetime.now(timezone.utc).isoformat(),  # v7.6: 시간 기반 관리용
             }
 
     def _release_position_slot(self, symbol: str):
@@ -193,15 +195,9 @@ class OrderManager:
             tp = self.client.round_price(symbol, tp)
             sl = self.client.round_price(symbol, sl)
 
-        # v7.3: 시그널 강도 기반 비중 조절 (공격적 복리 극대화)
-        if signal_strength >= 0.9:
-            size_mult = 2.0    # 매우 강한 시그널 → 풀 공격
-        elif signal_strength >= 0.8:
-            size_mult = 1.5    # 강한 시그널
-        elif signal_strength >= 0.7:
-            size_mult = 1.2    # 보통
-        else:
-            size_mult = 0.8    # 약한 시그널
+        # v7.6: 시그널 강도 기반 비중 조절 제거 — 실거래 데이터: 강도와 수익 무상관
+        # 강한 시그널에 큰 비중 → 큰 손실 발생 확인. 균일 비중으로 변경.
+        size_mult = 1.0
 
         # 수수료를 고려한 포지션 사이즈
         balance = self.client.get_balance()
@@ -211,8 +207,9 @@ class OrderManager:
         )
         qty *= size_mult
 
-        # v7.4: 포지션당 최대 마진 = 가용잔고의 30% (실전 안전장치)
-        max_margin_ratio = 0.30
+        # v7.6: 포지션당 최대 마진 = 가용잔고의 20% (실전 안전장치 강화)
+        # 데이터: 노셔널 $100+ = WR 33%, <$30 = WR 100% → 작은 포지션이 유리
+        max_margin_ratio = 0.20
         max_qty = (available * max_margin_ratio * lev) / entry_price
         qty = min(qty, max_qty)
 

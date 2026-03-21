@@ -49,8 +49,8 @@ TRADING = {
     "default_leverage": 15,
     "max_leverage": 20,
     "default_timeframe": "15",        # 15-minute candles (4H via resampling)
-    "risk_per_trade": 0.04,           # 4% base (실전 안정성, v7.4)
-    "max_open_positions": 5,          # 5개 동시
+    "risk_per_trade": 0.03,           # v7.6: 3% base (대형 손실 방지, was 4%)
+    "max_open_positions": 3,          # v7.6: 3개 동시 (집중 투자 + 리스크 분산)
     "max_daily_loss": 0.15,           # 15% — 실전 안전장치 (was 20%, v7.4)
 }
 
