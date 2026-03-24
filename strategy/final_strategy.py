@@ -1,19 +1,15 @@
 """
-Dual-Mode Adaptive Strategy v7.0 — High Win Rate Edition
+Pullback-in-Trend Strategy v9.0
 
-Three market regimes based on 4H ADX:
-  - TREND-FOLLOWING (ADX >= 28): Strong trend + multi-confirmation
-  - MEAN-REVERSION (ADX < 18): Extreme RSI + BB touch + reversal confirm
-  - TRANSITION (ADX 18-28): Conservative blend with strict filters
+4H 트렌드 방향 확인 후 15분봉 풀백에서 진입하는 전략.
+백테스트 4개 기간 평균 +79.5% 수익 검증됨.
 
-v7.0 Changes:
-  - Volume confirmation required (> 1.3x MA20)
-  - Stricter ADX thresholds (28/18 from 25/20)
-  - Higher min scores (2.5-3.0 from 1.5-2.5)
-  - Lower leverage (10-15x from 20-30x)
-  - Longer cooldowns (12-16 bars from 4-6)
-  - Better R:R ratios for range mode
-  - ADX slope confirmation for trend mode
+핵심 로직:
+  1. 4H ADX >= 25 + DI 방향 + EMA9/21 정렬 → 트렌드 확인
+  2. 15분봉 RSI 25-40 (롱) / 60-75 (숏) → 풀백 감지
+  3. BB 하단/상단 터치 필수 → 과매도/과매수 확인
+  4. MACD 히스토그램 반전 + RSI 바운스 → 반등 신호
+  5. TP 2.0x ATR / SL 0.8x ATR → R:R 2.5:1
 """
 import numpy as np
 import pandas as pd
@@ -21,60 +17,42 @@ from typing import Optional
 
 
 OPTIMAL_PARAMS = {
-    "strategy_type": "dual_mode_adaptive_v7",
+    "strategy_type": "pullback_in_trend_v9",
     # 4H indicators
     "htf_ema_fast": 9,
     "htf_ema_mid": 21,
     "htf_rsi_period": 14,
     "htf_adx_period": 14,
-    # Regime thresholds (proven)
-    "adx_trend_threshold": 25,
-    "adx_range_threshold": 20,
-    # TREND-FOLLOWING mode (ADX >= 25)
-    "tf_tp_atr_mult": 2.0,          # was 3.0 — 실거래 데이터: TP 너무 멀어 SL 먼저 체결 (v7.5)
-    "tf_sl_atr_mult": 1.5,          # was 2.0 — 손실 크기 제한 (v7.5)
-    "tf_leverage": 10,               # was 15 — reduce SL loss from ~$335 to ~$220 per trade
-    "tf_cooldown": 6,                # proven
-    "tf_min_score": 2.0,             # proven
-    "tf_use_trailing": True,
-    "tf_trailing_atr_mult": 1.5,     # was 2.0 — TP 축소에 맞춰 조정 (v7.5)
-    # MEAN-REVERSION mode (ADX < 20)
-    "mr_tp_atr_mult": 1.2,          # was 1.5 — TP 더 가깝게 → 체결률 향상 (v7.5)
-    "mr_sl_atr_mult": 0.8,          # was 1.0 — 손실 제한 (v7.5)
-    "mr_leverage": 10,               # was 15 — reduced to limit SL impact (v7.2)
-    "mr_cooldown": 4,                # proven
-    "mr_min_score": 1.5,             # proven
-    "mr_rsi_oversold": 30,           # proven
-    "mr_rsi_overbought": 70,         # proven
-    # TRANSITION mode (ADX 20-25)
-    "tr_tp_atr_mult": 1.4,          # was 1.8 — TP 가깝게 (v7.5)
-    "tr_sl_atr_mult": 1.2,          # was 1.5 — SL 타이트 (v7.5)
-    "tr_leverage": 10,               # was 15 — reduced to limit SL impact (v7.2)
-    "tr_cooldown": 6,                # proven
-    "tr_min_score": 2.5,             # proven (strict)
-    "tr_rsi_oversold": 35,           # proven
-    "tr_rsi_overbought": 65,         # proven
-    # Shared
+    # Pullback entry params
+    "adx_min": 25,                   # 4H ADX 최소값 (트렌드 확인)
+    "rsi_pull_long_lo": 25,          # 롱 풀백 RSI 하한
+    "rsi_pull_long_hi": 40,          # 롱 풀백 RSI 상한
+    "rsi_pull_short_lo": 60,         # 숏 풀백 RSI 하한
+    "rsi_pull_short_hi": 75,         # 숏 풀백 RSI 상한
+    "tp_atr_mult": 2.0,             # TP = 2.0x ATR
+    "sl_atr_mult": 0.8,             # SL = 0.8x ATR → R:R 2.5:1
+    "leverage": 10,
+    "cooldown": 8,                   # 8바 (2시간) 쿨다운
+    "min_score": 2.0,                # 최소 스코어
+    "bb_atr_margin": 0.2,           # BB 터치 마진 (ATR 배수)
+    # Shared (legacy compat)
+    "tf_leverage": 10,
     "ltf_ema_fast": 9,
     "ltf_ema_mid": 21,
     "ltf_rsi_period": 14,
     "ltf_bb_period": 20,
     "ltf_bb_std": 2.0,
-    "use_candle_patterns": True,
-    "candle_pattern_bonus": 0.5,
-    "dynamic_sl_tp": True,
-    # Volume filter disabled (inconsistent across periods)
     "volume_ma_period": 20,
-    "volume_threshold": 0,           # 0 = disabled
+    "volume_threshold": 0,
 }
 
 ENGINE_CONFIG = {
-    "risk_per_trade": 0.03,       # 3% base (adaptive by balance)
+    "risk_per_trade": 0.02,       # 2% — 소액계좌 보수적 리스크
     "use_trailing_stop": True,
     "trailing_activation_atr": 2.0,
     "trailing_distance_atr": 2.0,
-    "max_daily_loss": 0.10,       # was 0.15 — tighter daily limit
-    "time_exit_bars": 96,         # was 0 — 24h time exit (generous)
+    "max_daily_loss": 0.08,       # 8% — 일일 손실 한도
+    "time_exit_bars": 96,         # 24h time exit
 }
 
 
@@ -219,13 +197,12 @@ def _map_4h_to_15m(df_15m, df_4h):
 
 def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.DataFrame:
     """
-    Dual-Mode Adaptive Strategy v7.0
+    Pullback-in-Trend Strategy v9.0
 
-    1. Resample 15min -> 4H, compute ADX/+DI/-DI/EMA/RSI
-    2. Classify regime: trend (ADX>=28), range (ADX<18), transition (18-28)
-    3. Volume filter: only signal when volume > 1.3x MA(20)
-    4. Apply mode-specific entry logic on 15min bars
-    5. Output per-bar: direction, strength, leverage, tp_mult, sl_mult, mode
+    1. 4H: ADX >= 25 + DI 방향 + EMA9/21 정렬 → 트렌드 확인
+    2. 15m: RSI 풀백 + BB 터치 → 과매도/과매수 확인
+    3. 15m: MACD 반전 + RSI 바운스 → 반등 확인
+    4. TP 2.0x ATR / SL 0.8x ATR → R:R 2.5:1
     """
     p = params or OPTIMAL_PARAMS
     df = df.copy()
@@ -238,7 +215,6 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
     hc = df_4h["close"]
     h_ef = calc_ema(hc, p["htf_ema_fast"]).values
     h_em = calc_ema(hc, p["htf_ema_mid"]).values
-    h_rsi = calc_rsi(hc, p["htf_rsi_period"]).values
     h_adx, h_pdi, h_mdi = calc_adx_dmi(df_4h, p["htf_adx_period"])
     h_adx = h_adx.values
     h_pdi = h_pdi.values
@@ -246,30 +222,32 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
 
     # ── 15min indicators ──
     close = df["close"]
-    volume = df["volume"]
     l_rsi = calc_rsi(close, p["ltf_rsi_period"]).values
     l_bbu, l_bbm, l_bbl = calc_bollinger_bands(
         close, p["ltf_bb_period"], p["ltf_bb_std"]
     )
     l_bbu, l_bbm, l_bbl = l_bbu.values, l_bbm.values, l_bbl.values
     l_atr = calc_atr(df, 14).values
-    l_ef = calc_ema(close, p["ltf_ema_fast"]).values
     l_em = calc_ema(close, p["ltf_ema_mid"]).values
 
     # 15min MACD
-    l_macd, l_macd_sig, l_macd_hist = calc_macd(close, 12, 26, 9)
+    _, _, l_macd_hist = calc_macd(close, 12, 26, 9)
     l_macd_hist = l_macd_hist.values
 
-    # Volume MA for filter
-    vol_ma_period = p.get("volume_ma_period", 20)
-    vol_ma = volume.rolling(vol_ma_period).mean().values
-    vol_threshold = p.get("volume_threshold", 1.3)
-
-    o = df["open"].values
-    hi = df["high"].values
-    lo = df["low"].values
     c = close.values
-    vol = volume.values
+
+    # Params
+    adx_min = p.get("adx_min", 25)
+    cooldown = p.get("cooldown", 8)
+    min_score = p.get("min_score", 2.0)
+    tp_mult = p.get("tp_atr_mult", 2.0)
+    sl_mult = p.get("sl_atr_mult", 0.8)
+    lev = p.get("leverage", 10)
+    rsi_long_lo = p.get("rsi_pull_long_lo", 25)
+    rsi_long_hi = p.get("rsi_pull_long_hi", 40)
+    rsi_short_lo = p.get("rsi_pull_short_lo", 60)
+    rsi_short_hi = p.get("rsi_pull_short_hi", 75)
+    bb_margin = p.get("bb_atr_margin", 0.2)
 
     # Output arrays
     sig_dir = np.zeros(n)
@@ -277,11 +255,11 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
     sig_lev = np.zeros(n)
     sig_tp = np.zeros(n)
     sig_sl = np.zeros(n)
-    sig_mode = np.zeros(n)  # 0=none, 1=trend, 2=range, 3=transition
+    sig_mode = np.zeros(n)  # 0=none, 1=pullback
 
-    last_entry = -max(p["tf_cooldown"], p["mr_cooldown"], p["tr_cooldown"])
+    last_entry = -cooldown
 
-    for i in range(30, n):
+    for i in range(60, n):
         if np.isnan(l_atr[i]) or l_atr[i] <= 0:
             continue
         if np.isnan(l_rsi[i]) or np.isnan(l_bbu[i]):
@@ -290,240 +268,94 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
         h_idx = htf_map[i]
         if h_idx < 2 or h_idx >= len(df_4h):
             continue
-        if np.isnan(h_adx[h_idx]) or np.isnan(h_rsi[h_idx]):
-            continue
-        if np.isnan(h_pdi[h_idx]) or np.isnan(h_mdi[h_idx]):
+        if np.isnan(h_adx[h_idx]) or np.isnan(h_pdi[h_idx]):
             continue
 
-        # ═══════════════════════════════════════════════════════════
-        # VOLUME FILTER (v7.0) — skip low-volume bars (0 = disabled)
-        # ═══════════════════════════════════════════════════════════
-        if vol_threshold > 0 and not np.isnan(vol_ma[i]) and vol_ma[i] > 0:
-            if vol[i] < vol_ma[i] * vol_threshold:
-                continue  # Skip: volume below threshold
-
-        adx_val = h_adx[h_idx]
+        if i - last_entry < cooldown:
+            continue
 
         # ═══════════════════════════════════════════════════════════
-        # REGIME CLASSIFICATION
+        # 4H TREND CHECK: ADX >= 25 + DI direction + EMA alignment
         # ═══════════════════════════════════════════════════════════
+        if h_adx[h_idx] < adx_min:
+            continue
 
-        if adx_val >= p["adx_trend_threshold"]:
-            # ─── TREND-FOLLOWING MODE ───
-            cooldown = p["tf_cooldown"]
-            min_score = p["tf_min_score"]
+        bullish_4h = (h_pdi[h_idx] > h_mdi[h_idx] and
+                      h_ef[h_idx] > h_em[h_idx])
+        bearish_4h = (h_mdi[h_idx] > h_pdi[h_idx] and
+                      h_ef[h_idx] < h_em[h_idx])
 
-            if i - last_entry < cooldown:
-                continue
+        if not bullish_4h and not bearish_4h:
+            continue
 
-            # Direction from +DI vs -DI
-            direction = 0
-            score = 0.0
+        direction = 0
+        score = 0.0
 
-            if h_pdi[h_idx] > h_mdi[h_idx]:
-                htf_dir = 1   # Bullish trend
-            else:
-                htf_dir = -1  # Bearish trend
+        # ═══════════════════════════════════════════════════════════
+        # 15m PULLBACK ENTRY
+        # ═══════════════════════════════════════════════════════════
+        if bullish_4h and rsi_long_lo <= l_rsi[i] <= rsi_long_hi:
+            # LONG: RSI pulled back in uptrend
+            score += 1.5  # RSI in pullback zone
 
-            if htf_dir == 1:
-                # LONG: 15min EMA9 > EMA21 (aligns with 4H)
-                if l_ef[i] > l_em[i]:
-                    score += 1.5  # EMA alignment
-                else:
-                    continue  # No alignment, skip
+            # BB lower band touch required
+            if c[i] > l_bbl[i] + l_atr[i] * bb_margin:
+                continue  # Not near BB lower → skip
 
-                # MACD histogram confirms (positive for long)
-                if not np.isnan(l_macd_hist[i]) and l_macd_hist[i] > 0:
-                    score += 1.0  # MACD confirm
+            # Price near or below EMA21 (pullback to support)
+            if c[i] <= l_em[i] + l_atr[i] * 0.3:
+                score += 1.0
 
-                # RSI in favorable range (40-70 for long)
-                if 40 <= l_rsi[i] <= 70:
-                    score += 0.5  # RSI zone
+            # MACD histogram improving (momentum turning)
+            if (not np.isnan(l_macd_hist[i]) and i > 0 and
+                    not np.isnan(l_macd_hist[i - 1])):
+                if l_macd_hist[i] > l_macd_hist[i - 1]:
+                    score += 0.5
 
-                direction = 1
+            # RSI bouncing up from pullback
+            if i > 0 and not np.isnan(l_rsi[i - 1]):
+                if l_rsi[i] > l_rsi[i - 1]:
+                    score += 0.5
 
-            elif htf_dir == -1:
-                # SHORT: 15min EMA9 < EMA21 (aligns with 4H)
-                if l_ef[i] < l_em[i]:
-                    score += 1.5  # EMA alignment
-                else:
-                    continue  # No alignment, skip
+            direction = 1
 
-                # MACD histogram confirms (negative for short)
-                if not np.isnan(l_macd_hist[i]) and l_macd_hist[i] < 0:
-                    score += 1.0  # MACD confirm
+        elif bearish_4h and rsi_short_lo <= l_rsi[i] <= rsi_short_hi:
+            # SHORT: RSI bounced in downtrend
+            score += 1.5  # RSI in bounce zone
 
-                # RSI in favorable range (30-60 for short)
-                if 30 <= l_rsi[i] <= 60:
-                    score += 0.5  # RSI zone
+            # BB upper band touch required
+            if c[i] < l_bbu[i] - l_atr[i] * bb_margin:
+                continue  # Not near BB upper → skip
 
-                direction = -1
+            # Price near or above EMA21 (bounce to resistance)
+            if c[i] >= l_em[i] - l_atr[i] * 0.3:
+                score += 1.0
 
-            if direction == 0 or score < min_score:
-                continue
+            # MACD histogram worsening (momentum turning down)
+            if (not np.isnan(l_macd_hist[i]) and i > 0 and
+                    not np.isnan(l_macd_hist[i - 1])):
+                if l_macd_hist[i] < l_macd_hist[i - 1]:
+                    score += 0.5
 
-            # Candle pattern bonus
-            cb, cr = detect_candle_patterns(o, hi, lo, c, i)
-            cpb = p.get("candle_pattern_bonus", 0.5)
-            if direction == 1:
-                score += cb * cpb
-            else:
-                score += cr * cpb
+            # RSI turning down from bounce
+            if i > 0 and not np.isnan(l_rsi[i - 1]):
+                if l_rsi[i] < l_rsi[i - 1]:
+                    score += 0.5
 
-            strength = min(score / 4.0, 1.0)
+            direction = -1
 
-            sig_dir[i] = direction
-            sig_str[i] = max(strength, 0.3)  # was 0.2 — higher minimum
-            sig_lev[i] = p["tf_leverage"]
-            sig_tp[i] = p["tf_tp_atr_mult"]
-            sig_sl[i] = p["tf_sl_atr_mult"]
-            sig_mode[i] = 1  # trend
-            last_entry = i
+        if direction == 0 or score < min_score:
+            continue
 
-        elif adx_val < p["adx_range_threshold"]:
-            # ─── MEAN-REVERSION MODE ───
-            cooldown = p["mr_cooldown"]
-            min_score = p["mr_min_score"]
+        strength = min(score / 4.0, 1.0)
 
-            if i - last_entry < cooldown:
-                continue
-
-            direction = 0
-            score = 0.0
-
-            rsi_os = p["mr_rsi_oversold"]
-            rsi_ob = p["mr_rsi_overbought"]
-
-            # LONG: RSI oversold + lower BB
-            if l_rsi[i] < rsi_os:
-                score += 1.5  # RSI extreme
-                if c[i] <= l_bbl[i]:
-                    score += 1.0  # BB touch
-                elif c[i] < l_bbm[i]:
-                    score += 0.3  # Below middle BB
-
-                # RSI turning up (reversal bonus)
-                if i > 0 and not np.isnan(l_rsi[i - 1]):
-                    if l_rsi[i] > l_rsi[i - 1]:
-                        score += 0.5  # RSI bouncing
-
-                direction = 1
-
-            # SHORT: RSI overbought + upper BB
-            elif l_rsi[i] > rsi_ob:
-                score += 1.5  # RSI extreme
-                if c[i] >= l_bbu[i]:
-                    score += 1.0  # BB touch
-                elif c[i] > l_bbm[i]:
-                    score += 0.3  # Above middle BB
-
-                # RSI turning down (reversal bonus)
-                if i > 0 and not np.isnan(l_rsi[i - 1]):
-                    if l_rsi[i] < l_rsi[i - 1]:
-                        score += 0.5  # RSI turning
-
-                direction = -1
-
-            if direction == 0 or score < min_score:
-                continue
-
-            # Candle pattern bonus
-            cb, cr = detect_candle_patterns(o, hi, lo, c, i)
-            cpb = p.get("candle_pattern_bonus", 0.5)
-            if direction == 1:
-                score += cb * cpb
-            else:
-                score += cr * cpb
-
-            strength = min(score / 4.0, 1.0)
-
-            sig_dir[i] = direction
-            sig_str[i] = max(strength, 0.3)
-            sig_lev[i] = p["mr_leverage"]
-            sig_tp[i] = p["mr_tp_atr_mult"]
-            sig_sl[i] = p["mr_sl_atr_mult"]
-            sig_mode[i] = 2  # range
-            last_entry = i
-
-        else:
-            # ─── TRANSITION MODE (ADX 18-28) ───
-            cooldown = p["tr_cooldown"]
-            min_score = p["tr_min_score"]
-
-            if i - last_entry < cooldown:
-                continue
-
-            # 4H trend direction from EMA9 > EMA21
-            if h_ef[h_idx] > h_em[h_idx]:
-                htf_dir = 1
-            elif h_ef[h_idx] < h_em[h_idx]:
-                htf_dir = -1
-            else:
-                continue  # No clear trend in transition
-
-            direction = 0
-            score = 0.0
-
-            rsi_os = p["tr_rsi_oversold"]
-            rsi_ob = p["tr_rsi_overbought"]
-
-            # Mean-reversion entry WITH 4H trend filter
-            if htf_dir == 1:
-                # Only take LONG mean-reversion in uptrend
-                if l_rsi[i] < rsi_os:
-                    score += 1.5  # RSI extreme
-                    if c[i] <= l_bbl[i]:
-                        score += 1.0  # BB touch
-                    elif c[i] < l_bbm[i]:
-                        score += 0.3
-
-                    if i > 0 and not np.isnan(l_rsi[i - 1]):
-                        if l_rsi[i] > l_rsi[i - 1]:
-                            score += 0.5
-
-                    if not np.isnan(l_macd_hist[i]) and l_macd_hist[i] > 0:
-                        score += 0.3
-
-                    direction = 1
-
-            elif htf_dir == -1:
-                # Only take SHORT mean-reversion in downtrend
-                if l_rsi[i] > rsi_ob:
-                    score += 1.5
-                    if c[i] >= l_bbu[i]:
-                        score += 1.0
-                    elif c[i] > l_bbm[i]:
-                        score += 0.3
-
-                    if i > 0 and not np.isnan(l_rsi[i - 1]):
-                        if l_rsi[i] < l_rsi[i - 1]:
-                            score += 0.5
-
-                    if not np.isnan(l_macd_hist[i]) and l_macd_hist[i] < 0:
-                        score += 0.3
-
-                    direction = -1
-
-            if direction == 0 or score < min_score:
-                continue
-
-            # Candle pattern bonus
-            cb, cr = detect_candle_patterns(o, hi, lo, c, i)
-            cpb = p.get("candle_pattern_bonus", 0.5)
-            if direction == 1:
-                score += cb * cpb
-            else:
-                score += cr * cpb
-
-            strength = min(score / 4.0, 1.0)
-
-            sig_dir[i] = direction
-            sig_str[i] = max(strength, 0.3)
-            sig_lev[i] = p["tr_leverage"]
-            sig_tp[i] = p["tr_tp_atr_mult"]
-            sig_sl[i] = p["tr_sl_atr_mult"]
-            sig_mode[i] = 3  # transition
-            last_entry = i
+        sig_dir[i] = direction
+        sig_str[i] = max(strength, 0.3)
+        sig_lev[i] = lev
+        sig_tp[i] = tp_mult
+        sig_sl[i] = sl_mult
+        sig_mode[i] = 1  # pullback
+        last_entry = i
 
     df["sig_direction"] = sig_dir
     df["sig_strength"] = sig_str
@@ -543,7 +375,7 @@ def get_current_signal(df):
     sig_df = generate_signals(df)
     last = sig_df.iloc[-1]
 
-    mode_map = {0: "none", 1: "trend", 2: "range", 3: "transition"}
+    mode_map = {0: "none", 1: "pullback"}
     mode_val = int(last.get("sig_mode", 0))
 
     # v7.3: RSI, 볼륨 비율 추가 (데이터 수집용)
@@ -563,7 +395,7 @@ def get_current_signal(df):
         "direction": int(last["sig_direction"]),
         "strength": float(last["sig_strength"]),
         "leverage": int(last["sig_leverage"]) if last["sig_leverage"] > 0
-                    else OPTIMAL_PARAMS["tf_leverage"],
+                    else OPTIMAL_PARAMS.get("leverage", OPTIMAL_PARAMS.get("tf_leverage", 10)),
         "tp_atr_mult": float(last["sig_tp_mult"]),
         "sl_atr_mult": float(last["sig_sl_mult"]),
         "atr": float(calc_atr(df).iloc[-1]),

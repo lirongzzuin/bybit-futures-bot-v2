@@ -23,7 +23,7 @@ import time
 import signal
 import threading
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -59,12 +59,12 @@ class TradingBot:
             self.mode_str = "메인넷"
         mode = self.mode_str
         logger.info("=" * 60)
-        logger.info(f"암호화폐 선물 자동매매 봇 v7.6")
+        logger.info(f"암호화폐 선물 자동매매 봇 v9.0")
         logger.info(f"  모드: {mode}")
-        logger.info(f"  전략: Dual-Mode Adaptive (추세추종 + 평균회귀)")
+        logger.info(f"  전략: Pullback-in-Trend v9.0 (4H 트렌드 + 15m 풀백)")
         logger.info(f"  타임프레임: 15분봉 (4H 리샘플링)")
-        logger.info(f"  추세: TP {OPTIMAL_PARAMS['tf_tp_atr_mult']}x / SL {OPTIMAL_PARAMS['tf_sl_atr_mult']}x / {OPTIMAL_PARAMS['tf_leverage']}x lev")
-        logger.info(f"  횡보: TP {OPTIMAL_PARAMS['mr_tp_atr_mult']}x / SL {OPTIMAL_PARAMS['mr_sl_atr_mult']}x / {OPTIMAL_PARAMS['mr_leverage']}x lev")
+        logger.info(f"  TP {OPTIMAL_PARAMS['tp_atr_mult']}x / SL {OPTIMAL_PARAMS['sl_atr_mult']}x / {OPTIMAL_PARAMS['leverage']}x lev")
+        logger.info(f"  ADX >= {OPTIMAL_PARAMS['adx_min']} | RSI Long {OPTIMAL_PARAMS['rsi_pull_long_lo']}-{OPTIMAL_PARAMS['rsi_pull_long_hi']} | RSI Short {OPTIMAL_PARAMS['rsi_pull_short_lo']}-{OPTIMAL_PARAMS['rsi_pull_short_hi']}")
         logger.info(f"  리스크: 거래당 {ENGINE_CONFIG['risk_per_trade']*100}%")
         logger.info("=" * 60)
 
@@ -92,9 +92,9 @@ class TradingBot:
         self.safe_mode = False
         self.running = True
 
-        # v7.5: 동일 심볼 재진입 쿨다운 (30분)
+        # v8.0: 동일 심볼 재진입 쿨다운 (45분 — 과다 거래 방지)
         self._symbol_cooldown: dict[str, datetime] = {}
-        self.COOLDOWN_MINUTES = 30
+        self.COOLDOWN_MINUTES = 45
 
         # 시작 시 기존 포지션 동기화
         if self.paper_mode:
@@ -498,8 +498,8 @@ class TradingBot:
                     entry_time = entry_time.replace(tzinfo=timezone.utc)
                 hold_minutes = (datetime.now(timezone.utc) - entry_time).total_seconds() / 60
 
-                # 90분+ 보유 + 손실 중 → 시장가 손절 (데이터: 장기 보유 손실 확대)
-                if hold_minutes >= 90 and unrealized_pct < -0.005:
+                # v8.0: 120분+ 보유 + 손실 1%+ → 시장가 손절 (완화: 회복 기회 부여)
+                if hold_minutes >= 120 and unrealized_pct < -0.01:
                     logger.info(f"[{symbol}] 시간 초과 ({hold_minutes:.0f}분) + 손실 {unrealized_pct:.1%} → 타임아웃 청산")
                     self.order_mgr.execute_exit(symbol, reason=f"timeout_{hold_minutes:.0f}m_{unrealized_pct:.1%}")
                     self._symbol_cooldown[symbol] = datetime.now(timezone.utc) + timedelta(minutes=self.COOLDOWN_MINUTES)
@@ -529,10 +529,10 @@ class TradingBot:
             except Exception:
                 pass
 
-        # === Stage 1: 본전 보호 (수익 1%+) — 수수료 반영 ===
-        # SL 체결 시 Taker 수수료(0.055%) + 진입 Maker 수수료(0.02%) = 총 0.075%
+        # === Stage 1: 본전 보호 (수익 0.8%+) — 수수료 반영 ===
+        # v8.0: 0.8%로 하향 — 조기 본전 보호로 손실 전환 방지
         # 본전 SL = 진입가 + 왕복 수수료분 (순손실 제로 보장)
-        if unrealized_pct >= 0.01 and not pos_info.get("breakeven_set"):
+        if unrealized_pct >= 0.008 and not pos_info.get("breakeven_set"):
             fee_offset = entry * 0.00075  # 왕복 수수료 0.075%
             if side == "long":
                 be_sl = self.client.round_price(symbol, entry + fee_offset)
@@ -851,8 +851,8 @@ class TradingBot:
                 logger.info(f"[{symbol}] 재진입 쿨다운 중 ({remaining}분 남음) → 진입 스킵")
                 return
 
-            # v7.5: 최소 시그널 강도 필터 (노이즈 제거용 — 강도와 승률 무상관 확인됨)
-            MIN_SIGNAL_STRENGTH = 0.65
+            # v9.0: Pullback 전략 — score 2.0+ 통과 (전략 자체가 엄격)
+            MIN_SIGNAL_STRENGTH = 0.50
             if strength < MIN_SIGNAL_STRENGTH:
                 logger.info(f"[{symbol}] 시그널 강도 부족 ({strength:.2f} < {MIN_SIGNAL_STRENGTH}) → 진입 스킵")
                 try:

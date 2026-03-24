@@ -49,9 +49,9 @@ TRADING = {
     "default_leverage": 15,
     "max_leverage": 20,
     "default_timeframe": "15",        # 15-minute candles (4H via resampling)
-    "risk_per_trade": 0.03,           # v7.6: 3% base (대형 손실 방지, was 4%)
-    "max_open_positions": 3,          # v7.6: 3개 동시 (집중 투자 + 리스크 분산)
-    "max_daily_loss": 0.15,           # 15% — 실전 안전장치 (was 20%, v7.4)
+    "risk_per_trade": 0.02,           # v8.0: 2% — 소액계좌 리스크 축소
+    "max_open_positions": 2,          # v8.0: 2개 동시 — 집중 투자 + 수수료 절감
+    "max_daily_loss": 0.08,           # v8.0: 8% — 일일 손실 한도 강화
 }
 
 # === 일봉 전환 보호 (Daily Candle Transition Protection) ===
