@@ -23,18 +23,18 @@ OPTIMAL_PARAMS = {
     "htf_ema_mid": 21,
     "htf_rsi_period": 14,
     "htf_adx_period": 14,
-    # Pullback entry params
-    "adx_min": 25,                   # 4H ADX 최소값 (트렌드 확인)
+    # Pullback entry params (v9.1 — 페이퍼 데이터 수집용, 약간 완화)
+    "adx_min": 23,                   # 4H ADX 최소값 (23으로 완화, was 25)
     "rsi_pull_long_lo": 25,          # 롱 풀백 RSI 하한
-    "rsi_pull_long_hi": 40,          # 롱 풀백 RSI 상한
-    "rsi_pull_short_lo": 60,         # 숏 풀백 RSI 하한
+    "rsi_pull_long_hi": 43,          # 롱 풀백 RSI 상한 (43으로 확대, was 40)
+    "rsi_pull_short_lo": 57,         # 숏 풀백 RSI 하한 (57으로 확대, was 60)
     "rsi_pull_short_hi": 75,         # 숏 풀백 RSI 상한
     "tp_atr_mult": 2.0,             # TP = 2.0x ATR
     "sl_atr_mult": 0.8,             # SL = 0.8x ATR → R:R 2.5:1
     "leverage": 10,
-    "cooldown": 8,                   # 8바 (2시간) 쿨다운
+    "cooldown": 6,                   # 6바 (1.5시간) 쿨다운 (was 8)
     "min_score": 2.0,                # 최소 스코어
-    "bb_atr_margin": 0.2,           # BB 터치 마진 (ATR 배수)
+    "bb_atr_margin": 0.35,          # BB 터치 마진 (0.35로 완화, was 0.2)
     # Shared (legacy compat)
     "tf_leverage": 10,
     "ltf_ema_fast": 9,
