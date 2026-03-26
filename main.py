@@ -1264,7 +1264,7 @@ class TradingBot:
         for minute in ["01", "16", "31", "46"]:
             schedule.every().hour.at(f":{minute}").do(self.on_candle_close)
 
-        schedule.every(1).minutes.do(self.monitor)
+        schedule.every(30).seconds.do(self.monitor)
 
         # 정기 브리핑: KST 09:00 / 15:00 / 21:00 / 03:00 -> UTC 00:00 / 06:00 / 12:00 / 18:00
         for hour in ["00:00", "06:00", "12:00", "18:00"]:
@@ -1279,7 +1279,7 @@ class TradingBot:
         while self.running:
             try:
                 schedule.run_pending()
-                time.sleep(10)
+                time.sleep(5)
                 consecutive_errors = 0
             except KeyboardInterrupt:
                 self.running = False
