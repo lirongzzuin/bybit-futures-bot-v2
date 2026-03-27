@@ -33,17 +33,25 @@ class RiskState:
     consecutive_losses: int = 0
     open_positions: dict = field(default_factory=dict)  # symbol → position info
     daily_trade_halted: bool = False
+    peak_balance: float = 10000.0  # tracked as max of current_balance
+    mdd_circuit_breaker_triggered: bool = False  # circuit breaker activation flag
 
 
 class RiskManager:
+    # Circuit breaker configuration
+    MDD_CIRCUIT_BREAKER_PCT = 0.25  # 25% max drawdown threshold
+
     def __init__(self, initial_balance: float = 10000.0):
         self.state = RiskState(
             initial_balance=initial_balance,
             current_balance=initial_balance,
             daily_start_balance=initial_balance,
+            peak_balance=initial_balance,  # initialize peak_balance
             current_date=date.today().isoformat(),
         )
         self.correlation_cache: dict = {}
+        # Track ATR values for volatility regime detection
+        self.atr_history: list = []
 
     def reset_daily(self):
         """일일 리셋 (새 날짜 시작)"""
@@ -101,13 +109,84 @@ class RiskManager:
 
         return current_minutes >= start or current_minutes <= 0
 
+    def get_drawdown_factor(self) -> float:
+        """
+        Drawdown-based position sizing factor.
+        Returns a scaling factor based on current drawdown from peak equity:
+        - Drawdown < 10%: factor = 1.0 (normal)
+        - Drawdown 10-20%: factor = 0.7 (reduce size)
+        - Drawdown 20-30%: factor = 0.5 (significantly reduce)
+        - Drawdown > 30%: factor = 0.3 (minimal size)
+        """
+        if self.state.peak_balance <= 0:
+            return 1.0
+
+        drawdown = (self.state.peak_balance - self.state.current_balance) / self.state.peak_balance
+
+        if drawdown < 0.10:
+            return 1.0
+        elif drawdown < 0.20:
+            return 0.7
+        elif drawdown < 0.30:
+            return 0.5
+        else:
+            return 0.3
+
+    def get_volatility_regime(self, atr_current: float, atr_avg: float) -> str:
+        """
+        Volatility regime detection based on ATR.
+        Returns:
+        - "low" if atr_current < atr_avg * 0.7
+        - "normal" if 0.7 <= ratio <= 1.3
+        - "high" if atr_current > atr_avg * 1.3
+        - "extreme" if atr_current > atr_avg * 2.0
+        """
+        if atr_avg <= 0:
+            return "normal"
+
+        ratio = atr_current / atr_avg
+
+        if ratio > 2.0:
+            return "extreme"
+        elif ratio > 1.3:
+            return "high"
+        elif ratio < 0.7:
+            return "low"
+        else:
+            return "normal"
+
+    def check_circuit_breaker(self) -> tuple[bool, str]:
+        """
+        Circuit breaker to halt trading if max drawdown exceeds threshold.
+        Returns tuple[bool, str] where bool indicates if trading can proceed and str is the reason.
+        """
+        if self.state.peak_balance <= 0:
+            return True, "Circuit breaker inactive"
+
+        max_drawdown = (self.state.peak_balance - self.state.current_balance) / self.state.peak_balance
+
+        if max_drawdown > self.MDD_CIRCUIT_BREAKER_PCT:
+            self.state.mdd_circuit_breaker_triggered = True
+            logger.critical(
+                f"Circuit breaker triggered: max drawdown {max_drawdown:.1%} exceeds "
+                f"threshold {self.MDD_CIRCUIT_BREAKER_PCT:.1%}"
+            )
+            return False, f"Circuit breaker: max drawdown {max_drawdown:.1%} exceeds {self.MDD_CIRCUIT_BREAKER_PCT:.1%}"
+
+        return True, "Circuit breaker OK"
+
     def can_open_position(self, symbol: str, simulated_time: datetime = None) -> tuple[bool, str]:
         """새 포지션 개설 가능 여부 확인"""
-        # 0. 일봉 전환 시간대 진입 차단
+        # 0. Circuit breaker 체크
+        can_trade, circuit_reason = self.check_circuit_breaker()
+        if not can_trade:
+            return False, circuit_reason
+
+        # 1. 일봉 전환 시간대 진입 차단
         if DAILY_CANDLE_PROTECTION.get("block_new_entries", True) and self.is_daily_candle_transition(simulated_time):
             return False, "일봉 전환 시간대 (KST 08:45~09:15) — 신규 진입 차단"
 
-        # 1. 일일 손실 한도 체크
+        # 2. 일일 손실 한도 체크
         if self.state.daily_trade_halted:
             return False, "일일 최대 손실 도달 — 매매 중단"
 
@@ -116,19 +195,19 @@ class RiskManager:
             self.state.daily_trade_halted = True
             return False, f"일일 손실 {daily_loss_pct:.1%} — 한도({TRADING['max_daily_loss']:.0%}) 도달"
 
-        # 2. 최대 동시 포지션 체크
+        # 3. 최대 동시 포지션 체크
         if len(self.state.open_positions) >= TRADING["max_open_positions"]:
             return False, f"최대 포지션 수({TRADING['max_open_positions']}) 도달"
 
-        # 3. 이미 해당 심볼 포지션 보유 중
+        # 4. 이미 해당 심볼 포지션 보유 중
         if symbol in self.state.open_positions:
             return False, f"{symbol} 이미 포지션 보유 중"
 
-        # 4. 긴급 청산 체크
+        # 5. 긴급 청산 체크
         if self.state.current_balance <= self.state.initial_balance * 0.5:
             return False, "긴급: 잔고 50% 이하 — 신규 진입 불가"
 
-        # 5. 상관관계 체크 (기존 포지션과의 상관계수)
+        # 6. 상관관계 체크 (기존 포지션과의 상관계수)
         # (백테스트에서는 간소화 — 라이브에서 상세 구현)
 
         return True, "진입 가능"
@@ -137,9 +216,10 @@ class RiskManager:
                            stop_loss_price: float, leverage: int = None,
                            fee_rate: float = 0.0) -> float:
         """
-        포지션 사이즈 계산 (고정비율 방식 + 수수료 고려)
+        포지션 사이즈 계산 (고정비율 방식 + 수수료 고려 + 드로우다운 팩터)
         - 계좌의 risk_per_trade% 리스크
         - 3연패 이상이면 50% 축소
+        - 드로우다운 팩터 적용
         - 진입+청산 수수료를 리스크에서 차감
         """
         leverage = leverage or TRADING["default_leverage"]
@@ -164,6 +244,10 @@ class RiskManager:
         if self.state.consecutive_losses >= 3:
             risk_pct *= 0.5
             logger.warning(f"연속 {self.state.consecutive_losses}패 — 포지션 사이즈 50% 축소")
+
+        # 드로우다운 팩터 적용
+        drawdown_factor = self.get_drawdown_factor()
+        risk_pct *= drawdown_factor
 
         risk_amount = balance * risk_pct
         price_diff = abs(entry_price - stop_loss_price)
@@ -195,6 +279,10 @@ class RiskManager:
         """거래 종료 시 상태 업데이트"""
         self.state.current_balance += pnl
         self.state.daily_pnl += pnl
+
+        # Update peak_balance if current balance is higher
+        if self.state.current_balance > self.state.peak_balance:
+            self.state.peak_balance = self.state.current_balance
 
         if pnl < 0:
             self.state.consecutive_losses += 1

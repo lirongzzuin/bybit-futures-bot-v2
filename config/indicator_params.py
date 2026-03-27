@@ -5,6 +5,16 @@ Indicator & Trading Parameters v7.4
 - 실전 운용 모드 (v7.4)
 """
 
+# ============================================================================
+# ARCHIVED INDICATOR PARAMETERS
+# ============================================================================
+# NOTE: The following indicator parameters are ARCHIVED and only kept for
+# backward compatibility with legacy code. These indicators are no longer
+# actively used in the current strategy. Do not create new dependencies on
+# these parameters. They have been moved to archive/indicators/ and should
+# only be referenced if maintaining legacy integrations.
+# ============================================================================
+
 # === Candle Master Plan (legacy, kept for compute_indicators compatibility) ===
 CANDLE_MASTER_PLAN = {
     "zigzag_length": 9,

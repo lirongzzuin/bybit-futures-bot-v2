@@ -1,10 +1,23 @@
-# Crypto Futures Auto-Trading Bot — v9.1 Pullback-in-Trend
+# Crypto Futures Auto-Trading Bot — v9.2 Pullback-in-Trend
 
 > Bybit USDT Perpetual Futures 자동매매 — 4H 트렌드 확인 후 15분봉 풀백 진입 전략
 
-## 현재 상태: 실전 운용 (v9.1)
+## 현재 상태: 실전 운용 (v9.2)
 
 백테스트 4개 기간(2024 H2 ~ 2026 Q1) 교차 검증 + 페이퍼 트레이딩 검증 후 실전 배포.
+
+### v9.2 변경사항 (2026-03-27) — 구조 개선 & 리스크 강화
+
+| 항목 | 내용 |
+|------|------|
+| **코드 리팩토링** | main.py 1,325줄 → 654줄 (50% 감소). 포지션 관리(`bot/position_monitor.py`), 헬스체크 서버(`bot/health_server.py`) 모듈 분리 |
+| **레거시 정리** | 미사용 전략/지표 코드 7개 파일 → `archive/`로 이동 (ichimoku, candle_master_plan, volume_analysis, signal_generator 등) |
+| **MDD 관리 강화** | Drawdown 기반 포지션 사이징 추가 (10%→0.7x, 20%→0.5x, 30%+→0.3x) |
+| **서킷 브레이커** | MDD 25% 초과 시 자동 매매 중단 |
+| **변동성 감지** | ATR 기반 시장 변동성 레짐 감지 (low/normal/high/extreme) |
+| **테스트 코드** | 104개 유닛 테스트 추가 (전략, 리스크, 포지션, 스토리지) |
+
+**전략 파라미터 변경 없음** — v9.1 파라미터 유지, 동일 시그널 생성 보장
 
 ### 페이퍼 트레이딩 결과 (2026-03-18 ~ 03-25)
 
@@ -27,8 +40,6 @@
 | BB 마진 | 0.2 ATR | **0.35 ATR** | BB 근접 허용 (터치 강제 완화) |
 | 쿨다운 | 8바 (2시간) | **6바 (1.5시간)** | 연속 기회 포착 |
 
-**백테스트 검증 (1개월)**: +18.7%, 53거래, MDD 24.7% (v9.0: +43.6%, 37거래)
-
 ### v9.0 백테스트 결과
 
 | 기간 | 수익률 | 승률 | PF | MDD | 거래수 |
@@ -41,25 +52,49 @@
 
 ---
 
-## v9.0 변경사항 — 전략 전면 교체
+## 프로젝트 구조
 
-### 기존 전략 (Dual-Mode Adaptive v7.6) 문제점
-- 백테스트 3개월: **-19.7%**, 승률 36.2%
-- EMA 크로스오버 + MACD 기반 추세추종이 15분봉 노이즈에 취약
-- 모든 파라미터 조합에서 -47%~-50% 손실
-- R:R 1.33:1로 승률 57%+ 필요 (현실적으로 불가)
-
-### 새 전략: Pullback-in-Trend v9.0
-
-기존의 "추세 방향으로 진입"에서 **"추세 방향의 풀백에서 진입"**으로 근본적 전환.
-
-| 항목 | 기존 (v7.6) | 신규 (v9.0) |
-|------|------------|------------|
-| 진입 로직 | EMA 정배열 + MACD 확인 | **4H 트렌드 + 15m RSI 풀백 + BB 터치** |
-| R:R | 1.33:1 | **2.5:1** |
-| 필요 승률 | 57%+ | **29%+** |
-| 거래 빈도 | 하루 5-10회 | **하루 1-2회** |
-| 백테스트 평균 | 손실 | **+79.5%** |
+```
+trading-bot/
+├── main.py                  # 메인 봇 (654줄, v9.2 리팩토링)
+├── bot/
+│   ├── position_monitor.py  # 포지션 동적 관리 (638줄)
+│   └── health_server.py     # Flask 헬스체크/모니터링 서버
+├── strategy/
+│   ├── final_strategy.py    # Pullback-in-Trend v9.1 전략
+│   ├── risk_manager.py      # 리스크 관리 (v9.2 MDD 강화)
+│   └── position_manager.py  # TP/SL/트레일링 스탑
+├── exchange/
+│   ├── bybit_client.py      # Bybit API 래퍼
+│   ├── order_manager.py     # 주문 실행/관리
+│   └── paper_client.py      # 페이퍼 트레이딩 시뮬레이터
+├── data/
+│   ├── fetcher.py           # OHLCV 데이터 수집 (ccxt)
+│   └── storage.py           # SQLite 거래 기록
+├── utils/
+│   ├── briefing.py          # 6시간 정기 브리핑
+│   ├── logger.py            # 로깅
+│   └── notifier.py          # Telegram 알림
+├── backtest/
+│   ├── engine.py            # 백테스트 엔진
+│   ├── advanced_engine.py   # 고급 백테스트 (MFE/MAE)
+│   └── optimizer.py         # 파라미터 최적화
+├── tests/                   # 유닛 테스트 (104개)
+│   ├── conftest.py
+│   ├── test_final_strategy.py
+│   ├── test_risk_manager.py
+│   ├── test_position_manager.py
+│   └── test_storage.py
+├── config/
+│   ├── settings.py          # 환경변수 기반 설정
+│   └── indicator_params.py  # 전략/거래 파라미터
+├── archive/                 # 레거시 코드 아카이브
+│   ├── indicators/          # ichimoku, candle_master_plan, volume_analysis
+│   └── strategy/            # signal_generator, advanced_strategy 등
+├── Dockerfile
+├── fly.toml
+└── .github/workflows/deploy.yml
+```
 
 ---
 
@@ -68,15 +103,15 @@
 ### 진입 조건 (5단계 필터)
 
 ```
-1. 4H ADX >= 25          → 트렌드 존재 확인
+1. 4H ADX >= 23          → 트렌드 존재 확인
 2. 4H +DI/-DI 방향       → 트렌드 방향 결정
 3. 4H EMA9 > EMA21       → 트렌드 정렬 확인
 4. 15m RSI 풀백           → 과매도/과매수 확인
-   - 롱: RSI 25-40 (상승 추세에서 눌림)
-   - 숏: RSI 60-75 (하락 추세에서 반등)
+   - 롱: RSI 25-43 (상승 추세에서 눌림)
+   - 숏: RSI 57-75 (하락 추세에서 반등)
 5. 15m BB 밴드 터치       → 극단값 확인
-   - 롱: 가격 <= BB 하단 + 0.2 ATR
-   - 숏: 가격 >= BB 상단 - 0.2 ATR
+   - 롱: 가격 <= BB 하단 + 0.35 ATR
+   - 숏: 가격 >= BB 상단 - 0.35 ATR
 ```
 
 ### 추가 확인 (점수 가산)
@@ -125,6 +160,27 @@ TP 200%    → 2차 부분 익절 (추가 30% 청산)
 
 ---
 
+## 리스크 관리
+
+| 안전장치 | 기준 |
+|----------|------|
+| 거래당 리스크 | **2%** |
+| 최대 동시 포지션 | **2개** |
+| 일일 최대 손실 | **8%** → 매매 중단 |
+| 3연패 시 | 포지션 50% 축소 |
+| **MDD 10~20%** | **포지션 30% 축소** (v9.2) |
+| **MDD 20~30%** | **포지션 50% 축소** (v9.2) |
+| **MDD 30%+** | **포지션 70% 축소** (v9.2) |
+| **서킷 브레이커** | **MDD 25% → 매매 자동 중단** (v9.2) |
+| 긴급 청산 | 잔고 50% 이하 |
+| 급락 보호 | -5% → 즉시 청산 |
+| 타임아웃 | 120분 보유 + 손실 1%+ → 시장가 청산 |
+| 재진입 쿨다운 | **45분** (동일 심볼) |
+| 주문 방식 | 지정가(Maker) 우선 (수수료 0.02%) |
+| 포지션당 마진 | 가용잔고의 최대 20% |
+
+---
+
 ## 실시간 모니터링
 
 | 항목 | 주기 | 설명 |
@@ -136,45 +192,19 @@ TP 200%    → 2차 부분 익절 (추가 30% 청산)
 
 ---
 
-## 리스크 관리
+## 테스트
 
-| 안전장치 | 기준 |
-|----------|------|
-| 거래당 리스크 | **2%** |
-| 최대 동시 포지션 | **2개** |
-| 일일 최대 손실 | **8%** → 매매 중단 |
-| 3연패 시 | 포지션 50% 축소 |
-| 긴급 청산 | 잔고 50% 이하 |
-| 급락 보호 | -5% → 즉시 청산 |
-| 타임아웃 | 120분 보유 + 손실 1%+ → 시장가 청산 |
-| 재진입 쿨다운 | **45분** (동일 심볼) |
-| 주문 방식 | 지정가(Maker) 우선 (수수료 0.02%) |
-| 포지션당 마진 | 가용잔고의 최대 20% |
+```bash
+python -m pytest tests/ -v          # 전체 테스트 (104개)
+python -m pytest tests/ -v -k "risk" # 리스크 관련만
+```
 
----
-
-## 데이터 수집 & 분석
-
-| 데이터 | 용도 |
-|--------|------|
-| MFE/MAE | 최대 유리/불리 가격 추적 → TP/SL 최적화 |
-| Post-Exit 추적 | 청산 후 15/30/60/120/240분 가격 → TP/SL 적정성 검증 |
-| 스킵 시그널 | 진입 거부 사유별 기록 → 필터 최적화 |
-| TP/SL 조정 이력 | 실시간 조정 기록 → 동적 관리 효과 검증 |
-
----
-
-## 기술 스택
-
-| 항목 | 내용 |
-|------|------|
-| 언어 | Python 3.11 |
-| 거래소 | Bybit (pybit SDK) |
-| 지표 | EMA, RSI, ADX/DMI, MACD, Bollinger Bands |
-| 타임프레임 | 15분봉 진입, 4H 리샘플링 추세 확인 |
-| 인프라 | fly.io (도쿄), Docker |
-| 알림 | Telegram Bot API |
-| DB | SQLite (trades, daily_summary, tp_sl_adjustments, post_exit_tracking, skipped_signals) |
+| 테스트 모듈 | 테스트 수 | 커버리지 |
+|-------------|-----------|----------|
+| test_final_strategy.py | 26 | 지표 계산, 시그널 생성, 파라미터 검증 |
+| test_risk_manager.py | 33 | 포지션 사이징, MDD, 서킷브레이커, 일봉보호 |
+| test_position_manager.py | 22 | TP/SL, 트레일링, 청산 조건 |
+| test_storage.py | 23 | DB CRUD, 통계, 분석 |
 
 ---
 
@@ -184,6 +214,8 @@ TP 200%    → 2차 부분 익절 (추가 30% 청산)
 fly deploy                # fly.io 배포
 python main.py            # 로컬 실행
 ```
+
+GitHub `main` 브랜치에 push 시 자동 배포 (`.github/workflows/deploy.yml`)
 
 ### 환경변수
 ```
@@ -205,6 +237,21 @@ PAPER_INITIAL_BALANCE=10000
 | `/tp-sl-adjustments` | TP/SL 조정 이력 |
 | `/post-exit` | 청산 후 가격 추적 분석 |
 | `/skipped-signals` | 스킵된 시그널 통계 |
+
+---
+
+## 기술 스택
+
+| 항목 | 내용 |
+|------|------|
+| 언어 | Python 3.11 |
+| 거래소 | Bybit (pybit SDK) |
+| 지표 | EMA, RSI, ADX/DMI, MACD, Bollinger Bands |
+| 타임프레임 | 15분봉 진입, 4H 리샘플링 추세 확인 |
+| 인프라 | fly.io (도쿄), Docker |
+| 알림 | Telegram Bot API |
+| DB | SQLite |
+| 테스트 | pytest (104 tests) |
 
 ---
 
