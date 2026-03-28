@@ -92,6 +92,35 @@ ORDER_TYPE_CONFIG = {
     "limit_timeout_seconds": 300,
 }
 
+# === Profit Optimization v10.0 ===
+PROFIT_OPTIMIZATION = {
+    # Volatility-Adaptive TP/SL
+    "vol_tp_scale": {
+        "extreme": 3.0,    # ATR ratio > 2.0: 큰 움직임 → 넓은 TP
+        "high": 2.5,       # ATR ratio > 1.3: 평균 이상 변동성
+        "normal": 2.0,     # 기본값
+        "low": 1.5,        # ATR ratio < 0.7: 변동성 낮음 → 보수적 TP
+    },
+    "vol_sl_scale": {
+        "extreme": 1.0,    # SL도 약간 넓게 (노이즈 제거)
+        "high": 0.9,
+        "normal": 0.8,     # 기본값
+        "low": 0.7,        # 변동성 낮으면 타이트한 SL
+    },
+    # ADX Strength Bonus: 강한 추세 = 더 큰 수익 잠재력
+    "adx_tp_bonus": {
+        "threshold_1": 35,  # ADX >= 35 → +0.3 TP mult
+        "bonus_1": 0.3,
+        "threshold_2": 45,  # ADX >= 45 → +0.5 TP mult (대체)
+        "bonus_2": 0.5,
+    },
+    # Volume Confirmation: 거래량 스파이크 시 스코어 가산
+    "volume_spike_threshold": 1.5,  # 평균 대비 1.5배 이상
+    "volume_spike_score": 0.5,      # 추가 스코어
+    # ATR 이동평균 기간 (변동성 레짐 판단용)
+    "atr_avg_period": 50,
+}
+
 # === Backtest Symbols ===
 SYMBOLS = {
     "primary": "BTCUSDT",

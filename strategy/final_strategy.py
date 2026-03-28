@@ -1,15 +1,16 @@
 """
-Pullback-in-Trend Strategy v9.0
+Pullback-in-Trend Strategy v10.0
 
 4H 트렌드 방향 확인 후 15분봉 풀백에서 진입하는 전략.
-백테스트 4개 기간 평균 +79.5% 수익 검증됨.
+v10.0: 수익 극대화 — 변동성 적응 TP/SL + ADX 강도 보너스 + 거래량 확인
 
 핵심 로직:
-  1. 4H ADX >= 25 + DI 방향 + EMA9/21 정렬 → 트렌드 확인
-  2. 15분봉 RSI 25-40 (롱) / 60-75 (숏) → 풀백 감지
-  3. BB 하단/상단 터치 필수 → 과매도/과매수 확인
-  4. MACD 히스토그램 반전 + RSI 바운스 → 반등 신호
-  5. TP 2.0x ATR / SL 0.8x ATR → R:R 2.5:1
+  1. 4H ADX >= 23 + DI 방향 + EMA9/21 정렬 → 트렌드 확인
+  2. 15분봉 RSI 풀백 + BB 터치 → 과매도/과매수 확인
+  3. MACD 히스토그램 반전 + RSI 바운스 → 반등 신호
+  4. 변동성 레짐별 TP/SL 자동 조정 (extreme/high/normal/low)
+  5. ADX 강도에 따른 TP 보너스 (강한 추세 = 더 넓은 TP)
+  6. 거래량 스파이크 시 스코어 가산
 """
 import numpy as np
 import pandas as pd
@@ -208,6 +209,15 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
     df = df.copy()
     n = len(df)
 
+    # ── Profit Optimization Config ──
+    from config.indicator_params import PROFIT_OPTIMIZATION
+    vol_tp = PROFIT_OPTIMIZATION["vol_tp_scale"]
+    vol_sl = PROFIT_OPTIMIZATION["vol_sl_scale"]
+    adx_bonus_cfg = PROFIT_OPTIMIZATION["adx_tp_bonus"]
+    vol_spike_thresh = PROFIT_OPTIMIZATION["volume_spike_threshold"]
+    vol_spike_score = PROFIT_OPTIMIZATION["volume_spike_score"]
+    atr_avg_period = PROFIT_OPTIMIZATION["atr_avg_period"]
+
     # ── 4H indicators ──
     df_4h = _resample_to_4h(df)
     htf_map = _map_4h_to_15m(df, df_4h)
@@ -230,6 +240,13 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
     l_atr = calc_atr(df, 14).values
     l_em = calc_ema(close, p["ltf_ema_mid"]).values
 
+    # ATR 이동평균 (변동성 레짐 판단)
+    l_atr_ma = pd.Series(l_atr).rolling(atr_avg_period).mean().values
+
+    # 거래량 이동평균 (거래량 확인용)
+    vol = df["volume"].values
+    vol_ma = df["volume"].rolling(p.get("volume_ma_period", 20)).mean().values
+
     # 15min MACD
     _, _, l_macd_hist = calc_macd(close, 12, 26, 9)
     l_macd_hist = l_macd_hist.values
@@ -240,8 +257,8 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
     adx_min = p.get("adx_min", 25)
     cooldown = p.get("cooldown", 8)
     min_score = p.get("min_score", 2.0)
-    tp_mult = p.get("tp_atr_mult", 2.0)
-    sl_mult = p.get("sl_atr_mult", 0.8)
+    base_tp_mult = p.get("tp_atr_mult", 2.0)
+    base_sl_mult = p.get("sl_atr_mult", 0.8)
     lev = p.get("leverage", 10)
     rsi_long_lo = p.get("rsi_pull_long_lo", 25)
     rsi_long_hi = p.get("rsi_pull_long_hi", 40)
@@ -344,10 +361,47 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
 
             direction = -1
 
+        # ═══════════════════════════════════════════════════════════
+        # v10.0: VOLUME CONFIRMATION (score bonus)
+        # ═══════════════════════════════════════════════════════════
+        if (not np.isnan(vol_ma[i]) and vol_ma[i] > 0 and
+                vol[i] >= vol_ma[i] * vol_spike_thresh):
+            score += vol_spike_score
+
         if direction == 0 or score < min_score:
             continue
 
         strength = min(score / 4.0, 1.0)
+
+        # ═══════════════════════════════════════════════════════════
+        # v10.0: VOLATILITY-ADAPTIVE TP/SL
+        # ═══════════════════════════════════════════════════════════
+        if (not np.isnan(l_atr_ma[i]) and l_atr_ma[i] > 0):
+            atr_ratio = l_atr[i] / l_atr_ma[i]
+            if atr_ratio > 2.0:
+                tp_mult = vol_tp["extreme"]
+                sl_mult = vol_sl["extreme"]
+            elif atr_ratio > 1.3:
+                tp_mult = vol_tp["high"]
+                sl_mult = vol_sl["high"]
+            elif atr_ratio < 0.7:
+                tp_mult = vol_tp["low"]
+                sl_mult = vol_sl["low"]
+            else:
+                tp_mult = vol_tp["normal"]
+                sl_mult = vol_sl["normal"]
+        else:
+            tp_mult = base_tp_mult
+            sl_mult = base_sl_mult
+
+        # ═══════════════════════════════════════════════════════════
+        # v10.0: ADX STRENGTH BONUS (강한 추세 = 더 넓은 TP)
+        # ═══════════════════════════════════════════════════════════
+        cur_adx = h_adx[h_idx]
+        if cur_adx >= adx_bonus_cfg["threshold_2"]:
+            tp_mult += adx_bonus_cfg["bonus_2"]
+        elif cur_adx >= adx_bonus_cfg["threshold_1"]:
+            tp_mult += adx_bonus_cfg["bonus_1"]
 
         sig_dir[i] = direction
         sig_str[i] = max(strength, 0.3)
@@ -391,6 +445,20 @@ def get_current_signal(df):
     except Exception:
         pass
 
+    # v10.0: volatility regime info
+    atr_val = float(calc_atr(df).iloc[-1])
+    atr_ma_series = calc_atr(df).rolling(50).mean()
+    atr_ma_val = float(atr_ma_series.iloc[-1]) if not pd.isna(atr_ma_series.iloc[-1]) else atr_val
+    vol_regime = "normal"
+    if atr_ma_val > 0:
+        ratio = atr_val / atr_ma_val
+        if ratio > 2.0:
+            vol_regime = "extreme"
+        elif ratio > 1.3:
+            vol_regime = "high"
+        elif ratio < 0.7:
+            vol_regime = "low"
+
     return {
         "direction": int(last["sig_direction"]),
         "strength": float(last["sig_strength"]),
@@ -398,9 +466,10 @@ def get_current_signal(df):
                     else OPTIMAL_PARAMS.get("leverage", OPTIMAL_PARAMS.get("tf_leverage", 10)),
         "tp_atr_mult": float(last["sig_tp_mult"]),
         "sl_atr_mult": float(last["sig_sl_mult"]),
-        "atr": float(calc_atr(df).iloc[-1]),
+        "atr": atr_val,
         "close": float(last["close"]),
         "mode": mode_map.get(mode_val, "none"),
         "rsi": rsi_val,
         "vol_ratio": vol_ratio,
+        "vol_regime": vol_regime,
     }

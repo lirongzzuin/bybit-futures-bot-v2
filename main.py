@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-암호화폐 선물 자동매매 봇 — v9.1
+암호화폐 선물 자동매매 봇 — v10.0
 
-전략: Pullback-in-Trend v9.1 (4H 트렌드 + 15m 풀백)
+전략: Pullback-in-Trend v10.0 (4H 트렌드 + 15m 풀백 + 수익극대화)
 거래소: Bybit USDT 무기한 선물
 타임프레임: 15분봉 (4H 리샘플링으로 상위 추세 확인)
 
@@ -42,6 +42,7 @@ from utils.logger import setup_logger
 from utils.notifier import notify
 from bot.position_monitor import PositionMonitor
 from bot.health_server import start_health_server
+from data.collector import DataCollector
 
 logger = setup_logger("main")
 
@@ -94,6 +95,10 @@ class TradingBot:
         # v8.0: 동일 심볼 재진입 쿨다운 (45분 — 과다 거래 방지)
         self._symbol_cooldown: dict[str, datetime] = {}
         self.COOLDOWN_MINUTES = 45
+
+        # 데이터 수집기 초기화
+        self.collector = DataCollector()
+        logger.info("  데이터 수집기 초기화 완료 (collector.db)")
 
         # 시작 시 기존 포지션 동기화
         if self.paper_mode:
@@ -334,6 +339,41 @@ class TradingBot:
             if pd.isna(atr) or atr <= 0:
                 return
 
+            # ── v9.2 데이터 수집: 변동성 레짐 계산 ──
+            vol_regime = "normal"
+            atr_ratio = 1.0
+            try:
+                atr_series = calc_atr(df, 14)
+                atr_avg = atr_series.rolling(96).mean().iloc[-1]  # 24시간 평균 ATR
+                if not pd.isna(atr_avg) and atr_avg > 0:
+                    atr_ratio = atr / atr_avg
+                    vol_regime = self.risk.get_volatility_regime(atr, atr_avg)
+            except Exception:
+                pass
+
+            # ── v9.2 데이터 수집: 시장 스냅샷 (전략 심볼만) ──
+            if symbol in self.strategy_symbols:
+                try:
+                    self.collector.record_market_snapshot(
+                        symbol=symbol, df=df,
+                        signal_data=signal_data,
+                        volatility_regime=vol_regime,
+                        atr_ratio=atr_ratio,
+                    )
+                    # 최근 캔들 아카이브 (중복 무시)
+                    self.collector.archive_recent_candles(symbol, df, last_n=3)
+                    # 레짐 전환 감지
+                    h4_trend = signal_data.get("mode", "neutral")
+                    self.collector.check_regime_change(
+                        symbol=symbol,
+                        volatility_regime=vol_regime,
+                        h4_trend=h4_trend,
+                        h4_adx=0,
+                        atr_ratio=atr_ratio,
+                    )
+                except Exception as e:
+                    logger.debug(f"[{symbol}] 데이터 수집 경고: {e}")
+
             # 3. 기존 포지션 동적 관리 (15분봉 시그널 기반)
             if symbol in self.risk.state.open_positions:
                 self.pos_monitor.manage_existing_position(symbol, signal_data=signal_data)
@@ -353,6 +393,15 @@ class TradingBot:
             if cooldown_until and datetime.now(timezone.utc) < cooldown_until:
                 remaining = (cooldown_until - datetime.now(timezone.utc)).seconds // 60
                 logger.info(f"[{symbol}] 재진입 쿨다운 중 ({remaining}분 남음) → 진입 스킵")
+                # 쿨다운 스킵도 시그널 저널에 기록
+                self.collector.record_signal(
+                    symbol=symbol, side="long" if direction == 1 else "short",
+                    signal_strength=strength, signal_score=strength * 4,
+                    action="skipped", price=price, rsi=signal_data.get("rsi", 0),
+                    atr=atr, volatility_regime=vol_regime,
+                    volume_ratio=signal_data.get("vol_ratio", 0),
+                    skip_reason=f"cooldown_{remaining}min",
+                )
                 return
 
             # v9.0: Pullback 전략 — score 2.0+ 통과 (전략 자체가 엄격)
@@ -371,6 +420,16 @@ class TradingBot:
                         rsi=signal_data.get("rsi", 0),
                         market_regime=signal_data.get("mode", ""),
                         leverage=leverage,
+                    )
+                    # v9.2: 시그널 저널에도 기록 (가격 추적용)
+                    self.collector.record_signal(
+                        symbol=symbol, side="long" if direction == 1 else "short",
+                        signal_strength=strength, signal_score=strength * 4,
+                        action="skipped", price=price,
+                        rsi=signal_data.get("rsi", 0), atr=atr,
+                        volatility_regime=vol_regime,
+                        volume_ratio=signal_data.get("vol_ratio", 0),
+                        skip_reason=f"strength_below_{MIN_SIGNAL_STRENGTH}",
                     )
                 except Exception:
                     pass
@@ -412,6 +471,32 @@ class TradingBot:
                     "h4_confirmed": signal_data.get("h4_confirmed", False),
                 })
 
+            # 리스크 체크 (진입 가능 여부)
+            can_enter, risk_reason = self.risk.can_open_position(symbol)
+            if not can_enter:
+                logger.info(f"[{symbol}] 리스크 제한: {risk_reason}")
+                self.collector.record_signal(
+                    symbol=symbol, side=side,
+                    signal_strength=strength, signal_score=strength * 4,
+                    action="skipped", price=price,
+                    rsi=signal_data.get("rsi", 0), atr=atr,
+                    volatility_regime=vol_regime,
+                    volume_ratio=signal_data.get("vol_ratio", 0),
+                    skip_reason=f"risk:{risk_reason[:50]}",
+                )
+                return
+
+            # v9.2: 시그널 저널에 진입 기록
+            signal_journal_id = self.collector.record_signal(
+                symbol=symbol, side=side,
+                signal_strength=strength, signal_score=strength * 4,
+                action="entered", price=price,
+                rsi=signal_data.get("rsi", 0), atr=atr,
+                volatility_regime=vol_regime,
+                volume_ratio=signal_data.get("vol_ratio", 0),
+                entry_price=price,
+            )
+
             # 진입 실행 (v7.0: TP/SL 직접 전달 — ExitCondition 재계산 버그 방지)
             result = self.order_mgr.execute_entry(
                 symbol=symbol,
@@ -426,6 +511,17 @@ class TradingBot:
                 tp_price=tp_price,
                 sl_price=sl_price,
             )
+
+            # 진입 성공 시 시그널 ID + 변동성 레짐을 포지션에 연결
+            if result and symbol in self.risk.state.open_positions:
+                self.risk.state.open_positions[symbol]["signal_journal_id"] = signal_journal_id
+                # v10.0: 변동성 레짐 저장 (트레일링 SL 적응에 사용)
+                self.risk.state.open_positions[symbol]["vol_regime"] = signal_data.get("vol_regime", vol_regime)
+
+            # v9.2: 드로우다운 이벤트 체크
+            dd_factor = self.risk.get_drawdown_factor()
+            if dd_factor < 1.0:
+                self.collector.record_drawdown_event(self.risk.state, dd_factor)
 
         except Exception as e:
             logger.error(f"[{symbol}] 처리 에러: {e}", exc_info=True)
@@ -480,6 +576,15 @@ class TradingBot:
         paper_tag = " [PAPER]" if self.paper_mode else ""
         logger.info(f"  잔고: {balance['total']:.2f}{paper_tag} | "
                     f"포지션: {open_syms} | 추적 중: {tracked}")
+
+        # v9.2: 스킵된 시그널 가격 추적 (15분마다)
+        try:
+            def _get_price(sym):
+                t = self.client.get_ticker(sym)
+                return t["last_price"] if t else None
+            self.collector.track_skipped_signal_prices(_get_price)
+        except Exception as e:
+            logger.debug(f"스킵 시그널 추적 경고: {e}")
 
         # 페이퍼 모드: 6시간마다 요약 출력
         if self.paper_mode:
@@ -573,6 +678,64 @@ class TradingBot:
         from utils.briefing import send_briefing
         send_briefing(self.client, self.risk)
 
+    def collect_correlation_data(self):
+        """6시간마다 심볼 간 상관관계 수집"""
+        try:
+            symbol_returns = {}
+            for symbol in self.strategy_symbols[:10]:  # 상위 10개만
+                df = self.fetch_data(symbol, limit=200)
+                if not df.empty and len(df) > 50:
+                    symbol_returns[symbol] = df["close"].pct_change().dropna()
+                time.sleep(0.2)
+
+            if len(symbol_returns) >= 2:
+                self.collector.record_correlation_snapshot(symbol_returns)
+        except Exception as e:
+            logger.error(f"상관관계 수집 실패: {e}")
+
+    def collect_daily_benchmark(self):
+        """일별 성과 벤치마크 기록 (매일 UTC 00:00)"""
+        try:
+            balance = self.client.get_balance()
+            current_bal = balance["total"]
+            initial_bal = self.risk.state.daily_start_balance
+
+            strategy_return = ((current_bal - initial_bal) / initial_bal * 100
+                               if initial_bal > 0 else 0)
+
+            # BTC/ETH 수익률 (벤치마크)
+            btc_ret = eth_ret = 0
+            try:
+                btc_df = self.fetch_data("BTCUSDT", limit=100)
+                if not btc_df.empty and len(btc_df) >= 96:
+                    btc_ret = (btc_df["close"].iloc[-1] - btc_df["close"].iloc[-96]) / btc_df["close"].iloc[-96] * 100
+                eth_df = self.fetch_data("ETHUSDT", limit=100)
+                if not eth_df.empty and len(eth_df) >= 96:
+                    eth_ret = (eth_df["close"].iloc[-1] - eth_df["close"].iloc[-96]) / eth_df["close"].iloc[-96] * 100
+            except Exception:
+                pass
+
+            # 당일 거래 통계
+            from data.storage import get_trade_stats_since
+            stats = get_trade_stats_since(24)
+
+            dd_pct = 0
+            if self.risk.state.peak_balance > 0:
+                dd_pct = (self.risk.state.peak_balance - current_bal) / self.risk.state.peak_balance * 100
+
+            self.collector.record_daily_benchmark(
+                strategy_return_pct=strategy_return,
+                btc_return_pct=btc_ret,
+                eth_return_pct=eth_ret,
+                balance=current_bal,
+                total_trades=stats.get("count", 0),
+                win_rate=stats.get("win_rate", 0),
+                max_drawdown_pct=dd_pct,
+            )
+            logger.info(f"[벤치마크] 전략: {strategy_return:+.2f}% | BTC: {btc_ret:+.2f}% | ETH: {eth_ret:+.2f}%")
+        except Exception as e:
+            logger.error(f"일별 벤치마크 수집 실패: {e}")
+
 
     def run(self):
         """메인 루프"""
@@ -598,6 +761,11 @@ class TradingBot:
         # 정기 브리핑: KST 09:00 / 15:00 / 21:00 / 03:00 -> UTC 00:00 / 06:00 / 12:00 / 18:00
         for hour in ["00:00", "06:00", "12:00", "18:00"]:
             schedule.every().day.at(hour).do(self.briefing)
+
+        # v9.2: 데이터 수집 스케줄
+        for hour in ["00:30", "06:30", "12:30", "18:30"]:
+            schedule.every().day.at(hour).do(self.collect_correlation_data)
+        schedule.every().day.at("23:55").do(self.collect_daily_benchmark)
 
         # 시작 시 1회 실행
         self.on_candle_close()

@@ -70,6 +70,54 @@ def start_health_server(bot_instance):
             "signals": signals[:50],  # 최근 50개만
         })
 
+    # ── v9.2 데이터 수집 분석 엔드포인트 ──
+
+    @app.route("/collector/signals")
+    def collector_signals():
+        """시그널 저널 분석 (진입 vs 스킵 비교, 가상 성과)"""
+        days = int(request.args.get("days", 7))
+        return jsonify(bot_instance.collector.get_signal_journal_analysis(days))
+
+    @app.route("/collector/regimes")
+    def collector_regimes():
+        """변동성/트렌드 레짐 전환 이력"""
+        days = int(request.args.get("days", 30))
+        return jsonify(bot_instance.collector.get_regime_analysis(days))
+
+    @app.route("/collector/drawdowns")
+    def collector_drawdowns():
+        """드로우다운 이벤트 분석"""
+        days = int(request.args.get("days", 30))
+        return jsonify(bot_instance.collector.get_drawdown_analysis(days))
+
+    @app.route("/collector/correlations")
+    def collector_correlations():
+        """심볼 간 상관관계 분석"""
+        return jsonify(bot_instance.collector.get_correlation_analysis())
+
+    @app.route("/collector/benchmark")
+    def collector_benchmark():
+        """일별 성과 벤치마크 (전략 vs BTC vs ETH)"""
+        days = int(request.args.get("days", 30))
+        return jsonify(bot_instance.collector.get_benchmark_analysis(days))
+
+    @app.route("/collector/candles")
+    def collector_candles():
+        """캔들 아카이브 통계"""
+        return jsonify(bot_instance.collector.get_candle_archive_stats())
+
+    @app.route("/collector/summary")
+    def collector_summary():
+        """데이터 수집 종합 현황"""
+        return jsonify({
+            "signals": bot_instance.collector.get_signal_journal_analysis(7),
+            "regimes": bot_instance.collector.get_regime_analysis(7),
+            "candles": bot_instance.collector.get_candle_archive_stats(),
+            "benchmark": bot_instance.collector.get_benchmark_analysis(30),
+            "correlations": bot_instance.collector.get_correlation_analysis(),
+            "drawdowns": bot_instance.collector.get_drawdown_analysis(30),
+        })
+
     port = int(os.getenv("WEBHOOK_PORT", "5000"))
     t = threading.Thread(
         target=lambda: app.run(host="0.0.0.0", port=port, use_reloader=False),

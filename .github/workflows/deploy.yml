@@ -11,12 +11,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install flyctl
+      - name: Setup flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Validate FLY_API_TOKEN
         run: |
-          curl -L https://fly.io/install.sh | sh
-          echo "$HOME/.fly/bin" >> $GITHUB_PATH
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::error::FLY_API_TOKEN is not set. Go to repo Settings → Secrets → Actions and add it."
+            exit 1
+          fi
+          echo "FLY_API_TOKEN is configured, verifying..."
+          flyctl auth whoami || {
+            echo "::error::FLY_API_TOKEN is invalid or expired. Regenerate it with: flyctl tokens create deploy -x 999999h"
+            exit 1
+          }
+          echo "✅ Token is valid"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
       - name: Deploy to fly.io
-        run: flyctl deploy --strategy rolling --remote-only
+        run: flyctl deploy --strategy rolling --remote-only --wait-timeout 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

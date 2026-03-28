@@ -276,19 +276,29 @@ class PositionMonitor:
                 except Exception:
                     pass
 
-        # === Stage 2: 단계별 트레일링 SL (v7.4 강화 — MFE 누수 방지) ===
+        # === Stage 2: 변동성 적응 트레일링 SL (v10.0 — 레짐별 보호 비율) ===
         if unrealized_pct >= 0.015:
-            # v7.4: 더 공격적인 수익 보호 (MFE 대비 실현 수익 괴리 해소)
-            if unrealized_pct >= 0.10:
-                protect_ratio = 0.85  # 10%+ 수익 → 85% 보호 (was 80%)
-            elif unrealized_pct >= 0.05:
-                protect_ratio = 0.75  # 5%+ → 75% 보호 (was 65%)
-            elif unrealized_pct >= 0.03:
-                protect_ratio = 0.60  # 3%+ → 60% 보호 (was 50%)
-            elif unrealized_pct >= 0.02:
-                protect_ratio = 0.50  # 2%+ → 50% 보호 (was 35%)
+            # v10.0: 변동성 레짐에 따라 트레일링 강도 조절
+            # 고변동성: 더 여유 있는 트레일링 (whipsaw 방지, 큰 수익 추구)
+            # 저변동성: 타이트한 트레일링 (수익 확보, 추세 약함)
+            vol_regime = pos_info.get("vol_regime", "normal")
+            if vol_regime in ("extreme", "high"):
+                vol_offset = -0.05  # 보호 비율 5%p 감소 (여유 있게)
+            elif vol_regime == "low":
+                vol_offset = 0.05   # 보호 비율 5%p 증가 (타이트)
             else:
-                protect_ratio = 0.40  # 1.5%+ → 40% 보호 (신규)
+                vol_offset = 0.0
+
+            if unrealized_pct >= 0.10:
+                protect_ratio = min(0.85 + vol_offset, 0.90)
+            elif unrealized_pct >= 0.05:
+                protect_ratio = min(0.75 + vol_offset, 0.85)
+            elif unrealized_pct >= 0.03:
+                protect_ratio = min(0.60 + vol_offset, 0.75)
+            elif unrealized_pct >= 0.02:
+                protect_ratio = min(0.50 + vol_offset, 0.65)
+            else:
+                protect_ratio = min(0.40 + vol_offset, 0.55)
 
             if side == "long":
                 cur_high = pos_info.get("highest_price", price)
