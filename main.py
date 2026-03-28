@@ -6,11 +6,11 @@
 거래소: Bybit USDT 무기한 선물
 타임프레임: 15분봉 (4H 리샘플링으로 상위 추세 확인)
 
-v9.1 변경사항:
-  - 구조 리팩토링: position_monitor.py, health_server.py로 모듈화
-  - 포지션 관리 로직 분리 (PositionMonitor 클래스)
-  - Flask 헬스 서버 분리 (start_health_server 함수)
-  - 전략 로직은 변경 없음 (Pullback-in-Trend v9.1 유지)
+v10.0 변경사항:
+  - 변동성 적응 TP/SL (ATR 이동평균 대비 레짐별 자동 조정)
+  - ADX 강도 보너스 (강한 추세에서 TP 확대)
+  - 거래량 스파이크 확인 (스코어 가산)
+  - 변동성 적응 트레일링 SL
 
 실행: python main.py
 """
@@ -59,9 +59,9 @@ class TradingBot:
             self.mode_str = "메인넷"
         mode = self.mode_str
         logger.info("=" * 60)
-        logger.info(f"암호화폐 선물 자동매매 봇 v9.1")
+        logger.info(f"암호화폐 선물 자동매매 봇 v10.0")
         logger.info(f"  모드: {mode}")
-        logger.info(f"  전략: Pullback-in-Trend v9.1 (4H 트렌드 + 15m 풀백)")
+        logger.info(f"  전략: Pullback-in-Trend v10.0 (4H 트렌드 + 15m 풀백 + 수익극대화)")
         logger.info(f"  타임프레임: 15분봉 (4H 리샘플링)")
         logger.info(f"  TP {OPTIMAL_PARAMS['tp_atr_mult']}x / SL {OPTIMAL_PARAMS['sl_atr_mult']}x / {OPTIMAL_PARAMS['leverage']}x lev")
         logger.info(f"  ADX >= {OPTIMAL_PARAMS['adx_min']} | RSI Long {OPTIMAL_PARAMS['rsi_pull_long_lo']}-{OPTIMAL_PARAMS['rsi_pull_long_hi']} | RSI Short {OPTIMAL_PARAMS['rsi_pull_short_lo']}-{OPTIMAL_PARAMS['rsi_pull_short_hi']}")
@@ -744,7 +744,7 @@ class TradingBot:
 
         pos_list = list(self.risk.state.open_positions.keys())
         notify("봇 시작", (
-            f"Pullback-in-Trend v9.1 | {self.mode_str}\n"
+            f"Pullback-in-Trend v10.0 | {self.mode_str}\n"
             f"타임프레임: 15분봉 (4H 크로스검증)\n"
             f"모니터링: 거래량 상위 {len(self.strategy_symbols)}개 심볼\n"
             f"시장가 기준: 강도 >= {ORDER_TYPE_CONFIG['strong_signal_threshold']}\n"
