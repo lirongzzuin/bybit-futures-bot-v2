@@ -335,34 +335,30 @@ class TestOptimalParamsRegression:
     """Regression tests for OPTIMAL_PARAMS."""
 
     def test_optimal_params_unchanged(self):
-        """Verify OPTIMAL_PARAMS values match expected (regression test v11.0)."""
-        assert OPTIMAL_PARAMS["strategy_type"] == "pullback_in_trend_v11.0"
-        assert OPTIMAL_PARAMS["htf_ema_fast"] == 9
-        assert OPTIMAL_PARAMS["htf_ema_mid"] == 21
-        assert OPTIMAL_PARAMS["htf_rsi_period"] == 14
-        assert OPTIMAL_PARAMS["htf_adx_period"] == 14
-        assert OPTIMAL_PARAMS["adx_min"] == 23
-        assert OPTIMAL_PARAMS["rsi_pull_long_lo"] == 25
-        assert OPTIMAL_PARAMS["rsi_pull_long_hi"] == 43
-        assert OPTIMAL_PARAMS["rsi_pull_short_lo"] == 57
-        assert OPTIMAL_PARAMS["rsi_pull_short_hi"] == 75
+        """Verify OPTIMAL_PARAMS values match expected (regression test v12.0)."""
+        assert OPTIMAL_PARAMS["strategy_type"] == "pullback_in_trend_v12.0"
+        assert OPTIMAL_PARAMS["adx_min"] == 30
+        assert OPTIMAL_PARAMS["rsi_pull_long_lo"] == 20
+        assert OPTIMAL_PARAMS["rsi_pull_long_hi"] == 35
+        assert OPTIMAL_PARAMS["rsi_pull_short_lo"] == 65
+        assert OPTIMAL_PARAMS["rsi_pull_short_hi"] == 80
         assert OPTIMAL_PARAMS["tp_atr_mult"] == 2.0
         assert OPTIMAL_PARAMS["sl_atr_mult"] == 0.8
         assert OPTIMAL_PARAMS["leverage"] == 10
-        assert OPTIMAL_PARAMS["cooldown"] == 6
-        assert OPTIMAL_PARAMS["min_score"] == 2.0
-        assert OPTIMAL_PARAMS["bb_atr_margin"] == 0.35
-        assert OPTIMAL_PARAMS["max_leverage"] == 15
+        assert OPTIMAL_PARAMS["cooldown"] == 4
+        assert OPTIMAL_PARAMS["min_score"] == 2.5
+        assert OPTIMAL_PARAMS["bb_atr_margin"] == 0.3
+        assert OPTIMAL_PARAMS["max_leverage"] == 20
 
 
 class TestEngineConfigRegression:
     """Regression tests for ENGINE_CONFIG."""
 
     def test_engine_config_unchanged(self):
-        """Verify ENGINE_CONFIG values match expected (regression test v11.0)."""
-        assert ENGINE_CONFIG["risk_per_trade"] == 0.025
+        """Verify ENGINE_CONFIG values match expected (regression test v12.0)."""
+        assert ENGINE_CONFIG["risk_per_trade"] == 0.03
         assert ENGINE_CONFIG["use_trailing_stop"] is True
         assert ENGINE_CONFIG["trailing_activation_atr"] == 1.0
         assert ENGINE_CONFIG["trailing_distance_atr"] == 0.8
-        assert ENGINE_CONFIG["max_daily_loss"] == 0.08
-        assert ENGINE_CONFIG["time_exit_bars"] == 72
+        assert ENGINE_CONFIG["max_daily_loss"] == 0.10
+        assert ENGINE_CONFIG["time_exit_bars"] == 48

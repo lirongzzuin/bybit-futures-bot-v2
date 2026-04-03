@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-암호화폐 선물 자동매매 봇 — v11.0
+암호화폐 선물 자동매매 봇 — v12.0
 
-전략: Pullback-in-Trend v11.0 (4H 트렌드 + 15m 풀백 + 생존 최적화)
+전략: Pullback-in-Trend v12.0 (4H 트렌드 + 15m 풀백 + 생존 최적화)
 거래소: Bybit USDT 무기한 선물
 타임프레임: 15분봉 (4H 리샘플링으로 상위 추세 확인)
 
-v11.0 변경사항 (실전 데이터 기반 생존 최적화):
+v12.0 변경사항 (실전 데이터 기반 생존 최적화):
   - SL 1.2x → 1.5x ATR: 노이즈 스톱아웃 추가 제거
   - TP 2.0x → 2.5x ATR: R:R 1.67:1 유지
   - 레버리지 7x → 5x: 연패 시 계좌 보존
@@ -63,9 +63,9 @@ class TradingBot:
             self.mode_str = "메인넷"
         mode = self.mode_str
         logger.info("=" * 60)
-        logger.info(f"암호화폐 선물 자동매매 봇 v11.0")
+        logger.info(f"암호화폐 선물 자동매매 봇 v12.0")
         logger.info(f"  모드: {mode}")
-        logger.info(f"  전략: Pullback-in-Trend v11.0 (4H 트렌드 + 15m 풀백 + 수익극대화)")
+        logger.info(f"  전략: Pullback-in-Trend v12.0 (4H 트렌드 + 15m 풀백 + 수익극대화)")
         logger.info(f"  타임프레임: 15분봉 (4H 리샘플링)")
         logger.info(f"  TP {OPTIMAL_PARAMS['tp_atr_mult']}x / SL {OPTIMAL_PARAMS['sl_atr_mult']}x / {OPTIMAL_PARAMS['leverage']}x lev")
         logger.info(f"  ADX >= {OPTIMAL_PARAMS['adx_min']} | RSI Long {OPTIMAL_PARAMS['rsi_pull_long_lo']}-{OPTIMAL_PARAMS['rsi_pull_long_hi']} | RSI Short {OPTIMAL_PARAMS['rsi_pull_short_lo']}-{OPTIMAL_PARAMS['rsi_pull_short_hi']}")
@@ -96,9 +96,9 @@ class TradingBot:
         self.safe_mode = False
         self.running = True
 
-        # v11.0: 동일 심볼 재진입 쿨다운 (30분 — 기회 극대화)
+        # v12.0: 동일 심볼 재진입 쿨다운 (15분 — 실시간 대응)
         self._symbol_cooldown: dict[str, datetime] = {}
-        self.COOLDOWN_MINUTES = 30
+        self.COOLDOWN_MINUTES = 15
 
         # 데이터 수집기 초기화
         self.collector = DataCollector()
@@ -748,7 +748,7 @@ class TradingBot:
 
         pos_list = list(self.risk.state.open_positions.keys())
         notify("봇 시작", (
-            f"Pullback-in-Trend v11.0 | {self.mode_str}\n"
+            f"Pullback-in-Trend v12.0 | {self.mode_str}\n"
             f"타임프레임: 15분봉 (4H 크로스검증)\n"
             f"모니터링: 거래량 상위 {len(self.strategy_symbols)}개 심볼\n"
             f"시장가 기준: 강도 >= {ORDER_TYPE_CONFIG['strong_signal_threshold']}\n"
@@ -756,11 +756,12 @@ class TradingBot:
             f"기존 포지션 동기화: {len(pos_list)}개 {pos_list}"
         ))
 
-        # 15분 마감 시각 (매시 :01, :16, :31, :46)
-        for minute in ["01", "16", "31", "46"]:
+        # v12.0: 5분마다 시그널 분석 (실시간성 대폭 향상, was 15분)
+        for minute in ["01", "06", "11", "16", "21", "26", "31", "36", "41", "46", "51", "56"]:
             schedule.every().hour.at(f":{minute}").do(self.on_candle_close)
 
-        schedule.every(30).seconds.do(self.monitor)
+        # v12.0: 10초 모니터링 (was 30초)
+        schedule.every(10).seconds.do(self.monitor)
 
         # 정기 브리핑: KST 09:00 / 15:00 / 21:00 / 03:00 -> UTC 00:00 / 06:00 / 12:00 / 18:00
         for hour in ["00:00", "06:00", "12:00", "18:00"]:
@@ -780,7 +781,7 @@ class TradingBot:
         while self.running:
             try:
                 schedule.run_pending()
-                time.sleep(5)
+                time.sleep(2)  # v12.0: 2초 메인루프 (was 5초)
                 consecutive_errors = 0
             except KeyboardInterrupt:
                 self.running = False

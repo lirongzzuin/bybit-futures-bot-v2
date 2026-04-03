@@ -158,8 +158,8 @@ class RiskManager:
         else:
             return "normal"
 
-    # v11.0: Circuit breaker 쿨링 시간 (3시간 — 빠른 복귀)
-    CIRCUIT_BREAKER_COOLDOWN_HOURS = 3
+    # v12.0: Circuit breaker 쿨링 시간 (2시간 — 즉시 복귀)
+    CIRCUIT_BREAKER_COOLDOWN_HOURS = 2
 
     def check_circuit_breaker(self) -> tuple[bool, str]:
         """
