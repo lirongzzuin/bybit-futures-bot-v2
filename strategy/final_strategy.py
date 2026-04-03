@@ -1,24 +1,19 @@
 """
-Pullback-in-Trend Strategy v10.2
+Pullback-in-Trend Strategy v11.0 — Aggressive Profit Runner
 
 4H 트렌드 방향 확인 후 15분봉 풀백에서 진입하는 전략.
-v10.2: 실전 데이터 기반 생존 최적화 — 7연패/MDD 50% 문제 해결
+v11.0: 수익 극대화 — v9.1 공격적 파라미터 복원 + 동적 레버리지 + 수익 러너
 
-문제점 분석 (v10.1 실전 결과):
-  - SL 1.2x ATR에서도 연속 스톱아웃 발생 (7연패)
-  - MDD 25.7% → circuit breaker 발동 → 봇 정지
-  - 약한 추세에서 진입 → 풀백이 아닌 추세 반전으로 손실
-  - 동시 2포지션 → 상관 손실 증폭
+핵심 철학: "덜 잃는 봇"이 아닌 "돈 버는 봇"
+  - v9.1 페이퍼: 76.9% 승률, +41.89% 수익 (공격적 파라미터)
+  - v10.0~10.2: 보수적 전환 → 모든 버전 손실 (방향 오류)
 
-v10.2 개선:
-  1. SL 1.2x → 1.5x ATR: 추가 노이즈 필터링
-  2. TP 2.5x ATR: R:R 1.67:1 유지
-  3. 최소 스코어 2.5 → 3.0: 최고 품질 시그널만 진입
-  4. ADX >= 28: 강한 추세에서만 진입 (25에서 상향)
-  5. 레버리지 7x → 5x: 연패 시 계좌 보존
-  6. 최대 동시 포지션 1개: 집중도 향상
-  7. RSI 풀백 범위 축소: 롱 25-38, 숏 62-75
-  8. 4H 트렌드 확인 2봉 연속 요구: 추세 안정성 검증
+v11.0 설계:
+  1. v9.1 공격적 파라미터 복원 (ADX 23, RSI 25-43/57-75, SL 0.8x)
+  2. 동적 레버리지: 시그널 품질에 따라 10x~15x
+  3. 볼륨 가중 스코어링: 거래량 = 확신도
+  4. 적응형 쿨다운: 강한 추세에서 빠른 재진입
+  5. R:R 2.5:1 (TP 2.0x / SL 0.8x): 높은 기대값
 """
 import numpy as np
 import pandas as pd
@@ -26,26 +21,30 @@ from typing import Optional
 
 
 OPTIMAL_PARAMS = {
-    "strategy_type": "pullback_in_trend_v10.2",
+    "strategy_type": "pullback_in_trend_v11.0",
     # 4H indicators
     "htf_ema_fast": 9,
     "htf_ema_mid": 21,
     "htf_rsi_period": 14,
     "htf_adx_period": 14,
-    # Pullback entry params (v10.2 — 실전 데이터 기반 생존 최적화)
-    "adx_min": 28,                   # 4H ADX 최소값 (28: 강한 추세만, was 25)
+    # Pullback entry params (v11.0 — v9.1 공격적 파라미터 복원)
+    "adx_min": 23,                   # v9.1 복원 (was 28): 더 많은 추세 포착
     "rsi_pull_long_lo": 25,          # 롱 풀백 RSI 하한
-    "rsi_pull_long_hi": 38,          # 롱 풀백 RSI 상한 (38: 더 깊은 풀백, was 40)
-    "rsi_pull_short_lo": 62,         # 숏 풀백 RSI 하한 (62: 더 깊은 바운스, was 60)
+    "rsi_pull_long_hi": 43,          # v9.1 복원 (was 38): 얕은 풀백도 포착
+    "rsi_pull_short_lo": 57,         # v9.1 복원 (was 62): 얕은 바운스도 포착
     "rsi_pull_short_hi": 75,         # 숏 풀백 RSI 상한
-    "tp_atr_mult": 2.5,             # TP = 2.5x ATR (was 2.0: 더 넓은 목표)
-    "sl_atr_mult": 1.5,             # SL = 1.5x ATR → R:R ~1.67:1 (was 1.2x)
-    "leverage": 5,                   # 5x (was 7x): 연패 생존 최적화
-    "cooldown": 10,                  # 10바 (2.5시간) 쿨다운 (was 8: 과잉거래 방지)
-    "min_score": 3.0,                # 최소 스코어 (was 2.5: 최고 품질만)
-    "bb_atr_margin": 0.15,          # BB 터치 마진 (0.15: 정확한 터치, was 0.2)
+    "tp_atr_mult": 2.0,             # v9.1 복원 (was 2.5): 달성 가능한 목표
+    "sl_atr_mult": 0.8,             # v9.1 복원 (was 1.5): 타이트 SL, 높은 R:R
+    "leverage": 10,                  # v9.1 복원 (was 5): 수익 극대화
+    "cooldown": 6,                   # v9.1 복원 (was 10): 빠른 재진입
+    "min_score": 2.0,                # v9.1 복원 (was 3.0): 더 많은 기회
+    "bb_atr_margin": 0.35,          # v9.1 복원 (was 0.15): BB 근접 허용
+    # v11.0 신규: 동적 레버리지
+    "max_leverage": 15,              # 최대 레버리지
+    "leverage_score_threshold": 3.0, # 이 스코어 이상에서 레버리지 부스트
+    "leverage_boost_per_point": 2.5, # 스코어 1점당 +2.5x
     # Shared (legacy compat)
-    "tf_leverage": 5,
+    "tf_leverage": 10,
     "ltf_ema_fast": 9,
     "ltf_ema_mid": 21,
     "ltf_rsi_period": 14,
@@ -56,12 +55,12 @@ OPTIMAL_PARAMS = {
 }
 
 ENGINE_CONFIG = {
-    "risk_per_trade": 0.01,       # 1.0% — 생존 최우선 리스크 (was 1.5%)
+    "risk_per_trade": 0.025,      # 2.5% — 의미있는 포지션 사이즈 (was 1.0%)
     "use_trailing_stop": True,
-    "trailing_activation_atr": 2.0,  # 2.0x ATR 수익 시 트레일링 활성화 (was 1.5: 조기 활성화 방지)
-    "trailing_distance_atr": 1.2,    # 1.2x ATR 트레일링 거리 (was 1.0: 너무 타이트하면 조기 청산)
-    "max_daily_loss": 0.05,       # 5% — 일일 손실 한도 (was 6%)
-    "time_exit_bars": 96,         # 24h time exit (was 18h: 추세에 더 많은 시간 부여)
+    "trailing_activation_atr": 1.0,  # 1.0x ATR에서 트레일링 활성화 (빠른 수익 보호)
+    "trailing_distance_atr": 0.8,    # 0.8x ATR 트레일링 거리 (타이트)
+    "max_daily_loss": 0.08,       # 8% — 수익 기회를 위한 여유 (was 5%)
+    "time_exit_bars": 72,         # 18h time exit (빠른 손절)
 }
 
 
@@ -206,12 +205,14 @@ def _map_4h_to_15m(df_15m, df_4h):
 
 def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.DataFrame:
     """
-    Pullback-in-Trend Strategy v9.0
+    Pullback-in-Trend Strategy v11.0 — Aggressive Profit Runner
 
-    1. 4H: ADX >= 25 + DI 방향 + EMA9/21 정렬 → 트렌드 확인
-    2. 15m: RSI 풀백 + BB 터치 → 과매도/과매수 확인
+    1. 4H: ADX >= 23 + DI 방향 + EMA9/21 정렬 → 트렌드 확인
+    2. 15m: RSI 풀백 + BB 근접 → 과매도/과매수 확인
     3. 15m: MACD 반전 + RSI 바운스 → 반등 확인
-    4. TP 2.0x ATR / SL 0.8x ATR → R:R 2.5:1
+    4. 볼륨 가중 스코어링 → 확신도 기반 점수
+    5. 동적 레버리지 → 고품질 시그널에 더 큰 레버리지
+    6. TP 2.0x ATR / SL 0.8x ATR → R:R 2.5:1
     """
     p = params or OPTIMAL_PARAMS
     df = df.copy()
@@ -222,8 +223,6 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
     vol_tp = PROFIT_OPTIMIZATION["vol_tp_scale"]
     vol_sl = PROFIT_OPTIMIZATION["vol_sl_scale"]
     adx_bonus_cfg = PROFIT_OPTIMIZATION["adx_tp_bonus"]
-    vol_spike_thresh = PROFIT_OPTIMIZATION["volume_spike_threshold"]
-    vol_spike_score = PROFIT_OPTIMIZATION["volume_spike_score"]
     atr_avg_period = PROFIT_OPTIMIZATION["atr_avg_period"]
 
     # ── 4H indicators ──
@@ -251,7 +250,7 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
     # ATR 이동평균 (변동성 레짐 판단)
     l_atr_ma = pd.Series(l_atr).rolling(atr_avg_period).mean().values
 
-    # 거래량 이동평균 (거래량 확인용)
+    # 거래량 이동평균
     vol = df["volume"].values
     vol_ma = df["volume"].rolling(p.get("volume_ma_period", 20)).mean().values
 
@@ -262,17 +261,20 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
     c = close.values
 
     # Params
-    adx_min = p.get("adx_min", 25)
-    cooldown = p.get("cooldown", 8)
+    adx_min = p.get("adx_min", 23)
+    cooldown = p.get("cooldown", 6)
     min_score = p.get("min_score", 2.0)
     base_tp_mult = p.get("tp_atr_mult", 2.0)
     base_sl_mult = p.get("sl_atr_mult", 0.8)
     lev = p.get("leverage", 10)
+    max_lev = p.get("max_leverage", 15)
+    lev_threshold = p.get("leverage_score_threshold", 3.0)
+    lev_boost = p.get("leverage_boost_per_point", 2.5)
     rsi_long_lo = p.get("rsi_pull_long_lo", 25)
-    rsi_long_hi = p.get("rsi_pull_long_hi", 40)
-    rsi_short_lo = p.get("rsi_pull_short_lo", 60)
+    rsi_long_hi = p.get("rsi_pull_long_hi", 43)
+    rsi_short_lo = p.get("rsi_pull_short_lo", 57)
     rsi_short_hi = p.get("rsi_pull_short_hi", 75)
-    bb_margin = p.get("bb_atr_margin", 0.2)
+    bb_margin = p.get("bb_atr_margin", 0.35)
 
     # Output arrays
     sig_dir = np.zeros(n)
@@ -296,14 +298,22 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
         if np.isnan(h_adx[h_idx]) or np.isnan(h_pdi[h_idx]):
             continue
 
-        if i - last_entry < cooldown:
+        # ═══════════════════════════════════════════════════════════
+        # v11.0: 적응형 쿨다운 — 강한 추세에서 빠른 재진입
+        # ═══════════════════════════════════════════════════════════
+        cur_adx = h_adx[h_idx]
+        if cur_adx >= 35:
+            effective_cooldown = max(4, cooldown - 2)  # 강한 추세: 1시간
+        else:
+            effective_cooldown = cooldown  # 기본: 1.5시간
+
+        if i - last_entry < effective_cooldown:
             continue
 
         # ═══════════════════════════════════════════════════════════
-        # 4H TREND CHECK: ADX >= 28 + DI direction + EMA alignment
-        # v10.2: 2봉 연속 추세 확인 (추세 안정성 검증)
+        # 4H TREND CHECK: ADX >= 23 + DI direction + EMA alignment
         # ═══════════════════════════════════════════════════════════
-        if h_adx[h_idx] < adx_min:
+        if cur_adx < adx_min:
             continue
 
         bullish_4h = (h_pdi[h_idx] > h_mdi[h_idx] and
@@ -314,17 +324,6 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
         if not bullish_4h and not bearish_4h:
             continue
 
-        # v10.2: 이전 4H 봉에서도 같은 추세여야 진입 (추세 반전 필터)
-        if h_idx >= 1 and not np.isnan(h_adx[h_idx - 1]):
-            prev_bullish = (h_pdi[h_idx - 1] > h_mdi[h_idx - 1] and
-                            h_ef[h_idx - 1] > h_em[h_idx - 1])
-            prev_bearish = (h_mdi[h_idx - 1] > h_pdi[h_idx - 1] and
-                            h_ef[h_idx - 1] < h_em[h_idx - 1])
-            if bullish_4h and not prev_bullish:
-                continue
-            if bearish_4h and not prev_bearish:
-                continue
-
         direction = 0
         score = 0.0
 
@@ -332,24 +331,23 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
         # 15m PULLBACK ENTRY
         # ═══════════════════════════════════════════════════════════
         if bullish_4h and rsi_long_lo <= l_rsi[i] <= rsi_long_hi:
-            # LONG: RSI pulled back in uptrend
-            score += 1.5  # RSI in pullback zone
+            score += 1.5
 
-            # BB lower band touch required
+            # BB lower band proximity (v11.0: 넓은 마진)
             if c[i] > l_bbl[i] + l_atr[i] * bb_margin:
-                continue  # Not near BB lower → skip
+                continue
 
-            # Price near or below EMA21 (pullback to support)
+            # Price near EMA21 (pullback to support)
             if c[i] <= l_em[i] + l_atr[i] * 0.3:
                 score += 1.0
 
-            # MACD histogram improving (momentum turning)
+            # MACD histogram improving
             if (not np.isnan(l_macd_hist[i]) and i > 0 and
                     not np.isnan(l_macd_hist[i - 1])):
                 if l_macd_hist[i] > l_macd_hist[i - 1]:
                     score += 0.5
 
-            # RSI bouncing up from pullback
+            # RSI bouncing up
             if i > 0 and not np.isnan(l_rsi[i - 1]):
                 if l_rsi[i] > l_rsi[i - 1]:
                     score += 0.5
@@ -357,24 +355,23 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
             direction = 1
 
         elif bearish_4h and rsi_short_lo <= l_rsi[i] <= rsi_short_hi:
-            # SHORT: RSI bounced in downtrend
-            score += 1.5  # RSI in bounce zone
+            score += 1.5
 
-            # BB upper band touch required
+            # BB upper band proximity
             if c[i] < l_bbu[i] - l_atr[i] * bb_margin:
-                continue  # Not near BB upper → skip
+                continue
 
-            # Price near or above EMA21 (bounce to resistance)
+            # Price near EMA21 (bounce to resistance)
             if c[i] >= l_em[i] - l_atr[i] * 0.3:
                 score += 1.0
 
-            # MACD histogram worsening (momentum turning down)
+            # MACD histogram worsening
             if (not np.isnan(l_macd_hist[i]) and i > 0 and
                     not np.isnan(l_macd_hist[i - 1])):
                 if l_macd_hist[i] < l_macd_hist[i - 1]:
                     score += 0.5
 
-            # RSI turning down from bounce
+            # RSI turning down
             if i > 0 and not np.isnan(l_rsi[i - 1]):
                 if l_rsi[i] < l_rsi[i - 1]:
                     score += 0.5
@@ -382,11 +379,16 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
             direction = -1
 
         # ═══════════════════════════════════════════════════════════
-        # v10.0: VOLUME CONFIRMATION (score bonus)
+        # v11.0: VOLUME-WEIGHTED SCORING (단계별 가산)
         # ═══════════════════════════════════════════════════════════
-        if (not np.isnan(vol_ma[i]) and vol_ma[i] > 0 and
-                vol[i] >= vol_ma[i] * vol_spike_thresh):
-            score += vol_spike_score
+        if not np.isnan(vol_ma[i]) and vol_ma[i] > 0:
+            vol_ratio = vol[i] / vol_ma[i]
+            if vol_ratio >= 3.0:
+                score += 0.8    # 대량 거래 = 최고 확신
+            elif vol_ratio >= 2.0:
+                score += 0.5    # 강한 거래량
+            elif vol_ratio >= 1.5:
+                score += 0.3    # 평균 이상
 
         if direction == 0 or score < min_score:
             continue
@@ -394,7 +396,7 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
         strength = min(score / 4.0, 1.0)
 
         # ═══════════════════════════════════════════════════════════
-        # v10.0: VOLATILITY-ADAPTIVE TP/SL
+        # VOLATILITY-ADAPTIVE TP/SL
         # ═══════════════════════════════════════════════════════════
         if (not np.isnan(l_atr_ma[i]) and l_atr_ma[i] > 0):
             atr_ratio = l_atr[i] / l_atr_ma[i]
@@ -415,17 +417,30 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
             sl_mult = base_sl_mult
 
         # ═══════════════════════════════════════════════════════════
-        # v10.0: ADX STRENGTH BONUS (강한 추세 = 더 넓은 TP)
+        # ADX STRENGTH BONUS (강한 추세 = 더 넓은 TP)
         # ═══════════════════════════════════════════════════════════
-        cur_adx = h_adx[h_idx]
         if cur_adx >= adx_bonus_cfg["threshold_2"]:
             tp_mult += adx_bonus_cfg["bonus_2"]
         elif cur_adx >= adx_bonus_cfg["threshold_1"]:
             tp_mult += adx_bonus_cfg["bonus_1"]
 
+        # ═══════════════════════════════════════════════════════════
+        # v11.0: DYNAMIC LEVERAGE (시그널 품질 기반)
+        # ═══════════════════════════════════════════════════════════
+        dynamic_lev = lev
+        score_excess = score - lev_threshold
+        if score_excess > 0:
+            boost = int(score_excess * lev_boost)
+            dynamic_lev = min(lev + boost, max_lev)
+
+        # 대량 거래 + 고스코어: 추가 +1x
+        if (not np.isnan(vol_ma[i]) and vol_ma[i] > 0 and
+                vol[i] >= vol_ma[i] * 2.0 and score >= 3.0):
+            dynamic_lev = min(dynamic_lev + 1, max_lev)
+
         sig_dir[i] = direction
         sig_str[i] = max(strength, 0.3)
-        sig_lev[i] = lev
+        sig_lev[i] = dynamic_lev
         sig_tp[i] = tp_mult
         sig_sl[i] = sl_mult
         sig_mode[i] = 1  # pullback
@@ -452,7 +467,6 @@ def get_current_signal(df):
     mode_map = {0: "none", 1: "pullback"}
     mode_val = int(last.get("sig_mode", 0))
 
-    # v7.3: RSI, 볼륨 비율 추가 (데이터 수집용)
     rsi_val = 0.0
     vol_ratio = 0.0
     try:
@@ -465,7 +479,6 @@ def get_current_signal(df):
     except Exception:
         pass
 
-    # v10.0: volatility regime info
     atr_val = float(calc_atr(df).iloc[-1])
     atr_ma_series = calc_atr(df).rolling(50).mean()
     atr_ma_val = float(atr_ma_series.iloc[-1]) if not pd.isna(atr_ma_series.iloc[-1]) else atr_val

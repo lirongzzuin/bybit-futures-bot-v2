@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-암호화폐 선물 자동매매 봇 — v10.2
+암호화폐 선물 자동매매 봇 — v11.0
 
-전략: Pullback-in-Trend v10.2 (4H 트렌드 + 15m 풀백 + 생존 최적화)
+전략: Pullback-in-Trend v11.0 (4H 트렌드 + 15m 풀백 + 생존 최적화)
 거래소: Bybit USDT 무기한 선물
 타임프레임: 15분봉 (4H 리샘플링으로 상위 추세 확인)
 
-v10.2 변경사항 (실전 데이터 기반 생존 최적화):
+v11.0 변경사항 (실전 데이터 기반 생존 최적화):
   - SL 1.2x → 1.5x ATR: 노이즈 스톱아웃 추가 제거
   - TP 2.0x → 2.5x ATR: R:R 1.67:1 유지
   - 레버리지 7x → 5x: 연패 시 계좌 보존
@@ -63,9 +63,9 @@ class TradingBot:
             self.mode_str = "메인넷"
         mode = self.mode_str
         logger.info("=" * 60)
-        logger.info(f"암호화폐 선물 자동매매 봇 v10.2")
+        logger.info(f"암호화폐 선물 자동매매 봇 v11.0")
         logger.info(f"  모드: {mode}")
-        logger.info(f"  전략: Pullback-in-Trend v10.2 (4H 트렌드 + 15m 풀백 + 수익극대화)")
+        logger.info(f"  전략: Pullback-in-Trend v11.0 (4H 트렌드 + 15m 풀백 + 수익극대화)")
         logger.info(f"  타임프레임: 15분봉 (4H 리샘플링)")
         logger.info(f"  TP {OPTIMAL_PARAMS['tp_atr_mult']}x / SL {OPTIMAL_PARAMS['sl_atr_mult']}x / {OPTIMAL_PARAMS['leverage']}x lev")
         logger.info(f"  ADX >= {OPTIMAL_PARAMS['adx_min']} | RSI Long {OPTIMAL_PARAMS['rsi_pull_long_lo']}-{OPTIMAL_PARAMS['rsi_pull_long_hi']} | RSI Short {OPTIMAL_PARAMS['rsi_pull_short_lo']}-{OPTIMAL_PARAMS['rsi_pull_short_hi']}")
@@ -96,9 +96,9 @@ class TradingBot:
         self.safe_mode = False
         self.running = True
 
-        # v10.2: 동일 심볼 재진입 쿨다운 (60분 — 과다 거래 방지)
+        # v11.0: 동일 심볼 재진입 쿨다운 (30분 — 기회 극대화)
         self._symbol_cooldown: dict[str, datetime] = {}
-        self.COOLDOWN_MINUTES = 60
+        self.COOLDOWN_MINUTES = 30
 
         # 데이터 수집기 초기화
         self.collector = DataCollector()
@@ -748,7 +748,7 @@ class TradingBot:
 
         pos_list = list(self.risk.state.open_positions.keys())
         notify("봇 시작", (
-            f"Pullback-in-Trend v10.2 | {self.mode_str}\n"
+            f"Pullback-in-Trend v11.0 | {self.mode_str}\n"
             f"타임프레임: 15분봉 (4H 크로스검증)\n"
             f"모니터링: 거래량 상위 {len(self.strategy_symbols)}개 심볼\n"
             f"시장가 기준: 강도 >= {ORDER_TYPE_CONFIG['strong_signal_threshold']}\n"

@@ -1,14 +1,14 @@
 """
-리스크 관리 시스템 v10.2
+리스크 관리 시스템 v11.0 — Aggressive Profit Runner
 
 안전장치:
-  1. 고정비율(1.0%) 포지션 사이징 + 드로우다운 팩터
-  2. 최대 동시 포지션: 1개 (집중 전략)
-  3. 일일 최대 손실: 5% → 당일 매매 중단
+  1. 고정비율(2.5%) 포지션 사이징 + 드로우다운 팩터
+  2. 최대 동시 포지션: 3개 (다중 기회 포착)
+  3. 일일 최대 손실: 8% → 당일 매매 중단
   4. 3연패 시 사이즈 50% 축소
-  5. 최대 레버리지: 7배
+  5. 최대 레버리지: 15배 (동적)
   6. 긴급 청산: 잔고 50% 이하 시 전 포지션 청산
-  7. Circuit breaker: MDD 25% → 6시간 쿨링 후 자동 리셋
+  7. Circuit breaker: MDD 30% → 3시간 쿨링 후 자동 리셋
   8. 심볼별 상관관계 0.8 이상 동시 진입 제한
 """
 import numpy as np
@@ -40,8 +40,8 @@ class RiskState:
 
 
 class RiskManager:
-    # Circuit breaker configuration
-    MDD_CIRCUIT_BREAKER_PCT = 0.25  # 25% max drawdown threshold
+    # Circuit breaker configuration (v11.0: 완화)
+    MDD_CIRCUIT_BREAKER_PCT = 0.30  # 30% max drawdown threshold (was 25%)
 
     def __init__(self, initial_balance: float = 10000.0):
         self.state = RiskState(
@@ -125,11 +125,12 @@ class RiskManager:
 
         drawdown = (self.state.peak_balance - self.state.current_balance) / self.state.peak_balance
 
-        if drawdown < 0.10:
+        # v11.0: 드로다운 팩터 완화 (수익 기회 유지)
+        if drawdown < 0.15:
             return 1.0
-        elif drawdown < 0.20:
-            return 0.7
-        elif drawdown < 0.30:
+        elif drawdown < 0.25:
+            return 0.75
+        elif drawdown < 0.35:
             return 0.5
         else:
             return 0.3
@@ -157,8 +158,8 @@ class RiskManager:
         else:
             return "normal"
 
-    # v10.2: Circuit breaker 쿨링 시간 (6시간)
-    CIRCUIT_BREAKER_COOLDOWN_HOURS = 6
+    # v11.0: Circuit breaker 쿨링 시간 (3시간 — 빠른 복귀)
+    CIRCUIT_BREAKER_COOLDOWN_HOURS = 3
 
     def check_circuit_breaker(self) -> tuple[bool, str]:
         """
@@ -251,9 +252,8 @@ class RiskManager:
         leverage = leverage or TRADING["default_leverage"]
         leverage = min(leverage, TRADING["max_leverage"])
 
-        # v10.1: 단순화된 리스크 — 잔고 무관 고정 비율 (일관성 향상)
-        # SL 1.2x ATR + 7x 레버리지 기준: 실질 손실 ~1.5% 내외 목표
-        risk_pct = TRADING["risk_per_trade"]  # 1.5% 고정
+        # v11.0: 공격적 포지션 사이징 — 2.5% 고정
+        risk_pct = TRADING["risk_per_trade"]  # 2.5%
 
         # 연속 손실 시 사이즈 축소
         if self.state.consecutive_losses >= 3:
