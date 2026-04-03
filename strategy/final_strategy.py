@@ -1,16 +1,24 @@
 """
-Pullback-in-Trend Strategy v10.0
+Pullback-in-Trend Strategy v10.2
 
 4H 트렌드 방향 확인 후 15분봉 풀백에서 진입하는 전략.
-v10.0: 수익 극대화 — 변동성 적응 TP/SL + ADX 강도 보너스 + 거래량 확인
+v10.2: 실전 데이터 기반 생존 최적화 — 7연패/MDD 50% 문제 해결
 
-핵심 로직:
-  1. 4H ADX >= 23 + DI 방향 + EMA9/21 정렬 → 트렌드 확인
-  2. 15분봉 RSI 풀백 + BB 터치 → 과매도/과매수 확인
-  3. MACD 히스토그램 반전 + RSI 바운스 → 반등 신호
-  4. 변동성 레짐별 TP/SL 자동 조정 (extreme/high/normal/low)
-  5. ADX 강도에 따른 TP 보너스 (강한 추세 = 더 넓은 TP)
-  6. 거래량 스파이크 시 스코어 가산
+문제점 분석 (v10.1 실전 결과):
+  - SL 1.2x ATR에서도 연속 스톱아웃 발생 (7연패)
+  - MDD 25.7% → circuit breaker 발동 → 봇 정지
+  - 약한 추세에서 진입 → 풀백이 아닌 추세 반전으로 손실
+  - 동시 2포지션 → 상관 손실 증폭
+
+v10.2 개선:
+  1. SL 1.2x → 1.5x ATR: 추가 노이즈 필터링
+  2. TP 2.5x ATR: R:R 1.67:1 유지
+  3. 최소 스코어 2.5 → 3.0: 최고 품질 시그널만 진입
+  4. ADX >= 28: 강한 추세에서만 진입 (25에서 상향)
+  5. 레버리지 7x → 5x: 연패 시 계좌 보존
+  6. 최대 동시 포지션 1개: 집중도 향상
+  7. RSI 풀백 범위 축소: 롱 25-38, 숏 62-75
+  8. 4H 트렌드 확인 2봉 연속 요구: 추세 안정성 검증
 """
 import numpy as np
 import pandas as pd
@@ -18,26 +26,26 @@ from typing import Optional
 
 
 OPTIMAL_PARAMS = {
-    "strategy_type": "pullback_in_trend_v9",
+    "strategy_type": "pullback_in_trend_v10.2",
     # 4H indicators
     "htf_ema_fast": 9,
     "htf_ema_mid": 21,
     "htf_rsi_period": 14,
     "htf_adx_period": 14,
-    # Pullback entry params (v9.1 — 페이퍼 데이터 수집용, 약간 완화)
-    "adx_min": 23,                   # 4H ADX 최소값 (23으로 완화, was 25)
+    # Pullback entry params (v10.2 — 실전 데이터 기반 생존 최적화)
+    "adx_min": 28,                   # 4H ADX 최소값 (28: 강한 추세만, was 25)
     "rsi_pull_long_lo": 25,          # 롱 풀백 RSI 하한
-    "rsi_pull_long_hi": 43,          # 롱 풀백 RSI 상한 (43으로 확대, was 40)
-    "rsi_pull_short_lo": 57,         # 숏 풀백 RSI 하한 (57으로 확대, was 60)
+    "rsi_pull_long_hi": 38,          # 롱 풀백 RSI 상한 (38: 더 깊은 풀백, was 40)
+    "rsi_pull_short_lo": 62,         # 숏 풀백 RSI 하한 (62: 더 깊은 바운스, was 60)
     "rsi_pull_short_hi": 75,         # 숏 풀백 RSI 상한
-    "tp_atr_mult": 2.0,             # TP = 2.0x ATR
-    "sl_atr_mult": 0.8,             # SL = 0.8x ATR → R:R 2.5:1
-    "leverage": 10,
-    "cooldown": 6,                   # 6바 (1.5시간) 쿨다운 (was 8)
-    "min_score": 2.0,                # 최소 스코어
-    "bb_atr_margin": 0.35,          # BB 터치 마진 (0.35로 완화, was 0.2)
+    "tp_atr_mult": 2.5,             # TP = 2.5x ATR (was 2.0: 더 넓은 목표)
+    "sl_atr_mult": 1.5,             # SL = 1.5x ATR → R:R ~1.67:1 (was 1.2x)
+    "leverage": 5,                   # 5x (was 7x): 연패 생존 최적화
+    "cooldown": 10,                  # 10바 (2.5시간) 쿨다운 (was 8: 과잉거래 방지)
+    "min_score": 3.0,                # 최소 스코어 (was 2.5: 최고 품질만)
+    "bb_atr_margin": 0.15,          # BB 터치 마진 (0.15: 정확한 터치, was 0.2)
     # Shared (legacy compat)
-    "tf_leverage": 10,
+    "tf_leverage": 5,
     "ltf_ema_fast": 9,
     "ltf_ema_mid": 21,
     "ltf_rsi_period": 14,
@@ -48,12 +56,12 @@ OPTIMAL_PARAMS = {
 }
 
 ENGINE_CONFIG = {
-    "risk_per_trade": 0.02,       # 2% — 소액계좌 보수적 리스크
+    "risk_per_trade": 0.01,       # 1.0% — 생존 최우선 리스크 (was 1.5%)
     "use_trailing_stop": True,
-    "trailing_activation_atr": 2.0,
-    "trailing_distance_atr": 2.0,
-    "max_daily_loss": 0.08,       # 8% — 일일 손실 한도
-    "time_exit_bars": 96,         # 24h time exit
+    "trailing_activation_atr": 2.0,  # 2.0x ATR 수익 시 트레일링 활성화 (was 1.5: 조기 활성화 방지)
+    "trailing_distance_atr": 1.2,    # 1.2x ATR 트레일링 거리 (was 1.0: 너무 타이트하면 조기 청산)
+    "max_daily_loss": 0.05,       # 5% — 일일 손실 한도 (was 6%)
+    "time_exit_bars": 96,         # 24h time exit (was 18h: 추세에 더 많은 시간 부여)
 }
 
 
@@ -292,7 +300,8 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
             continue
 
         # ═══════════════════════════════════════════════════════════
-        # 4H TREND CHECK: ADX >= 25 + DI direction + EMA alignment
+        # 4H TREND CHECK: ADX >= 28 + DI direction + EMA alignment
+        # v10.2: 2봉 연속 추세 확인 (추세 안정성 검증)
         # ═══════════════════════════════════════════════════════════
         if h_adx[h_idx] < adx_min:
             continue
@@ -304,6 +313,17 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
 
         if not bullish_4h and not bearish_4h:
             continue
+
+        # v10.2: 이전 4H 봉에서도 같은 추세여야 진입 (추세 반전 필터)
+        if h_idx >= 1 and not np.isnan(h_adx[h_idx - 1]):
+            prev_bullish = (h_pdi[h_idx - 1] > h_mdi[h_idx - 1] and
+                            h_ef[h_idx - 1] > h_em[h_idx - 1])
+            prev_bearish = (h_mdi[h_idx - 1] > h_pdi[h_idx - 1] and
+                            h_ef[h_idx - 1] < h_em[h_idx - 1])
+            if bullish_4h and not prev_bullish:
+                continue
+            if bearish_4h and not prev_bearish:
+                continue
 
         direction = 0
         score = 0.0

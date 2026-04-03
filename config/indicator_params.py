@@ -1,8 +1,8 @@
 """
-Indicator & Trading Parameters v7.4
-- Compound Growth Machine v7.4 strategy params
-- Aggressive risk management + MFE 누수 방지 개선
-- 실전 운용 모드 (v7.4)
+Indicator & Trading Parameters v10.2
+- Pullback-in-Trend v10.2 strategy params
+- 실전 데이터 기반 생존 최적화: SL 1.5x ATR, 레버리지 5x, 리스크 1.0%
+- 7연패/MDD 50% 문제 해결, 진입 필터 대폭 강화
 """
 
 # ============================================================================
@@ -53,15 +53,15 @@ VOLUME = {
     "ma_length": 20,
 }
 
-# === Trading Config (v7.4 — 실전 운용 + MFE 누수 방지) ===
+# === Trading Config (v10.2 — 생존 최적화 + 집중 전략) ===
 TRADING = {
     "exchange": "bybit",
-    "default_leverage": 15,
-    "max_leverage": 20,
-    "default_timeframe": "15",        # 15-minute candles (4H via resampling)
-    "risk_per_trade": 0.02,           # v8.0: 2% — 소액계좌 리스크 축소
-    "max_open_positions": 2,          # v8.0: 2개 동시 — 집중 투자 + 수수료 절감
-    "max_daily_loss": 0.08,           # v8.0: 8% — 일일 손실 한도 강화
+    "default_leverage": 5,             # v10.2: 5x (was 7x) — 연패 생존
+    "max_leverage": 7,                 # v10.2: 7x 제한 (was 10x)
+    "default_timeframe": "15",         # 15-minute candles (4H via resampling)
+    "risk_per_trade": 0.01,            # v10.2: 1.0% (was 1.5%) — 생존 최우선
+    "max_open_positions": 1,           # v10.2: 1개 집중 (was 2) — 상관 손실 방지
+    "max_daily_loss": 0.05,            # v10.2: 5% (was 6%) — 보수적 한도
 }
 
 # === 일봉 전환 보호 (Daily Candle Transition Protection) ===
@@ -92,31 +92,32 @@ ORDER_TYPE_CONFIG = {
     "limit_timeout_seconds": 300,
 }
 
-# === Profit Optimization v10.0 ===
+# === Profit Optimization v10.2 ===
+# v10.2: 생존 최적화 — 넓은 SL + 적정 TP로 노이즈 스톱아웃 제거
 PROFIT_OPTIMIZATION = {
-    # Volatility-Adaptive TP/SL
+    # Volatility-Adaptive TP/SL (v10.2: SL 대폭 확대)
     "vol_tp_scale": {
-        "extreme": 3.0,    # ATR ratio > 2.0: 큰 움직임 → 넓은 TP
-        "high": 2.5,       # ATR ratio > 1.3: 평균 이상 변동성
-        "normal": 2.0,     # 기본값
-        "low": 1.5,        # ATR ratio < 0.7: 변동성 낮음 → 보수적 TP
+        "extreme": 3.0,    # ATR ratio > 2.0: 극단 변동시 넓은 목표
+        "high": 2.7,       # ATR ratio > 1.3: was 2.2 → 2.7
+        "normal": 2.5,     # was 2.0 → 2.5 (기본 TP 상향)
+        "low": 2.0,        # ATR ratio < 0.7: was 1.8 → 2.0
     },
     "vol_sl_scale": {
-        "extreme": 1.0,    # SL도 약간 넓게 (노이즈 제거)
-        "high": 0.9,
-        "normal": 0.8,     # 기본값
-        "low": 0.7,        # 변동성 낮으면 타이트한 SL
+        "extreme": 2.0,    # was 1.5 → 2.0 (고변동시 넓은 SL 필수)
+        "high": 1.7,       # was 1.3 → 1.7
+        "normal": 1.5,     # was 1.2 → 1.5 (핵심: 스톱아웃 추가 감소)
+        "low": 1.2,        # was 1.0 → 1.2
     },
-    # ADX Strength Bonus: 강한 추세 = 더 큰 수익 잠재력
+    # ADX Strength Bonus: 보수적 (과도한 TP 확대 방지)
     "adx_tp_bonus": {
-        "threshold_1": 35,  # ADX >= 35 → +0.3 TP mult
-        "bonus_1": 0.3,
-        "threshold_2": 45,  # ADX >= 45 → +0.5 TP mult (대체)
-        "bonus_2": 0.5,
+        "threshold_1": 45,  # was 40 → 45 (매우 강한 추세에서만)
+        "bonus_1": 0.2,     # 유지
+        "threshold_2": 55,  # was 50 → 55
+        "bonus_2": 0.3,     # 유지
     },
-    # Volume Confirmation: 거래량 스파이크 시 스코어 가산
-    "volume_spike_threshold": 1.5,  # 평균 대비 1.5배 이상
-    "volume_spike_score": 0.5,      # 추가 스코어
+    # Volume Confirmation: 강화 (확실한 거래량 확인)
+    "volume_spike_threshold": 2.5,  # was 2.0 → 2.5 (평균 대비 2.5배 이상)
+    "volume_spike_score": 0.3,      # 유지
     # ATR 이동평균 기간 (변동성 레짐 판단용)
     "atr_avg_period": 50,
 }

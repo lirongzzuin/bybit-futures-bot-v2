@@ -1,14 +1,15 @@
 """
-리스크 관리 시스템
+리스크 관리 시스템 v10.2
 
 안전장치:
-  1. Kelly Criterion / 고정비율(2%) 포지션 사이징
-  2. 최대 동시 포지션: 5개
-  3. 일일 최대 손실: 6% → 당일 매매 중단
+  1. 고정비율(1.0%) 포지션 사이징 + 드로우다운 팩터
+  2. 최대 동시 포지션: 1개 (집중 전략)
+  3. 일일 최대 손실: 5% → 당일 매매 중단
   4. 3연패 시 사이즈 50% 축소
-  5. 최대 레버리지: 20배
+  5. 최대 레버리지: 7배
   6. 긴급 청산: 잔고 50% 이하 시 전 포지션 청산
-  7. 심볼별 상관관계 0.8 이상 동시 진입 제한
+  7. Circuit breaker: MDD 25% → 6시간 쿨링 후 자동 리셋
+  8. 심볼별 상관관계 0.8 이상 동시 진입 제한
 """
 import numpy as np
 import pandas as pd
@@ -35,6 +36,7 @@ class RiskState:
     daily_trade_halted: bool = False
     peak_balance: float = 10000.0  # tracked as max of current_balance
     mdd_circuit_breaker_triggered: bool = False  # circuit breaker activation flag
+    circuit_breaker_triggered_at: Optional[datetime] = None  # v10.2: 발동 시각
 
 
 class RiskManager:
@@ -155,23 +157,47 @@ class RiskManager:
         else:
             return "normal"
 
+    # v10.2: Circuit breaker 쿨링 시간 (6시간)
+    CIRCUIT_BREAKER_COOLDOWN_HOURS = 6
+
     def check_circuit_breaker(self) -> tuple[bool, str]:
         """
         Circuit breaker to halt trading if max drawdown exceeds threshold.
-        Returns tuple[bool, str] where bool indicates if trading can proceed and str is the reason.
+        v10.2: 6시간 쿨링 후 자동 리셋 (peak를 현재 잔고로 재설정)
         """
         if self.state.peak_balance <= 0:
             return True, "Circuit breaker inactive"
+
+        # Already triggered — check cooldown for auto-reset
+        if self.state.mdd_circuit_breaker_triggered:
+            if self.state.circuit_breaker_triggered_at:
+                elapsed = (datetime.now(timezone.utc) - self.state.circuit_breaker_triggered_at).total_seconds() / 3600
+                if elapsed >= self.CIRCUIT_BREAKER_COOLDOWN_HOURS:
+                    # 쿨링 완료 → 리셋 (peak를 현재 잔고로)
+                    self.state.mdd_circuit_breaker_triggered = False
+                    self.state.circuit_breaker_triggered_at = None
+                    self.state.peak_balance = self.state.current_balance
+                    self.state.consecutive_losses = 0
+                    logger.info(
+                        f"Circuit breaker 리셋 — {elapsed:.1f}시간 쿨링 완료. "
+                        f"새 peak: ${self.state.current_balance:.2f}"
+                    )
+                    return True, "Circuit breaker reset after cooldown"
+
+            max_drawdown = (self.state.peak_balance - self.state.current_balance) / self.state.peak_balance
+            return False, f"Circuit breaker active: MDD {max_drawdown:.1%}"
 
         max_drawdown = (self.state.peak_balance - self.state.current_balance) / self.state.peak_balance
 
         if max_drawdown > self.MDD_CIRCUIT_BREAKER_PCT:
             self.state.mdd_circuit_breaker_triggered = True
+            self.state.circuit_breaker_triggered_at = datetime.now(timezone.utc)
             logger.critical(
                 f"Circuit breaker triggered: max drawdown {max_drawdown:.1%} exceeds "
-                f"threshold {self.MDD_CIRCUIT_BREAKER_PCT:.1%}"
+                f"threshold {self.MDD_CIRCUIT_BREAKER_PCT:.1%}. "
+                f"{self.CIRCUIT_BREAKER_COOLDOWN_HOURS}시간 쿨링 시작."
             )
-            return False, f"Circuit breaker: max drawdown {max_drawdown:.1%} exceeds {self.MDD_CIRCUIT_BREAKER_PCT:.1%}"
+            return False, f"Circuit breaker: MDD {max_drawdown:.1%} > {self.MDD_CIRCUIT_BREAKER_PCT:.1%}"
 
         return True, "Circuit breaker OK"
 
@@ -225,20 +251,9 @@ class RiskManager:
         leverage = leverage or TRADING["default_leverage"]
         leverage = min(leverage, TRADING["max_leverage"])
 
-        # v7.6: 리스크 축소 — 데이터: 작은 포지션이 WR 높음
-        # 잔고 대비 실질 리스크 (레버리지 감안 후 잔고 대비 실제 손실 비율)
-        if balance < 1000:
-            target_actual = 0.08    # 소액: 실질 8% (was 12%)
-        elif balance < 5000:
-            target_actual = 0.06   # 실질 6% (was 10%)
-        elif balance < 20000:
-            target_actual = 0.05   # 실질 5% (was 8%)
-        elif balance < 50000:
-            target_actual = 0.04   # 실질 4% (was 6%)
-        else:
-            target_actual = 0.03   # 대액: 실질 3% (was 5%)
-
-        risk_pct = target_actual / leverage  # 레버리지 역산
+        # v10.1: 단순화된 리스크 — 잔고 무관 고정 비율 (일관성 향상)
+        # SL 1.2x ATR + 7x 레버리지 기준: 실질 손실 ~1.5% 내외 목표
+        risk_pct = TRADING["risk_per_trade"]  # 1.5% 고정
 
         # 연속 손실 시 사이즈 축소
         if self.state.consecutive_losses >= 3:

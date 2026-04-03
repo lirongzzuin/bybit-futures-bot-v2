@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-v10.0 수익 극대화 백테스트 비교
-- v9.1 (기존) vs v10.0 (변동성 적응 TP/SL + ADX 보너스 + 거래량 확인)
-- BTCUSDT 15분봉 데이터로 검증
+v10.1 데이터 기반 개선 백테스트 비교
+- v10.0 (기존) vs v10.1 (SL 확대 + 시그널 필터 강화 + 레버리지 축소)
+- BTCUSDT 15분봉 합성 데이터로 검증
 """
 import sys
 import os
@@ -109,51 +109,70 @@ def generate_synthetic_btc_data(days=90, volatility="mixed"):
     return df
 
 
-def run_v9_backtest(df):
-    """v9.1 기존 전략 (고정 TP/SL)"""
+def run_v10_0_backtest(df):
+    """v10.0 기존 전략 (SL 0.8x, 레버리지 10x)"""
     from config.indicator_params import PROFIT_OPTIMIZATION
+    from strategy.final_strategy import OPTIMAL_PARAMS
 
-    # 임시로 v9.1 설정 복원 (고정값)
-    original = PROFIT_OPTIMIZATION.copy()
+    # 임시로 v10.0 설정 복원
+    original_opt = PROFIT_OPTIMIZATION.copy()
+    original_params = OPTIMAL_PARAMS.copy()
+
     PROFIT_OPTIMIZATION["vol_tp_scale"] = {
-        "extreme": 2.0, "high": 2.0, "normal": 2.0, "low": 2.0
+        "extreme": 3.0, "high": 2.5, "normal": 2.0, "low": 1.5
     }
     PROFIT_OPTIMIZATION["vol_sl_scale"] = {
-        "extreme": 0.8, "high": 0.8, "normal": 0.8, "low": 0.8
+        "extreme": 1.0, "high": 0.9, "normal": 0.8, "low": 0.7
     }
     PROFIT_OPTIMIZATION["adx_tp_bonus"] = {
-        "threshold_1": 999, "bonus_1": 0, "threshold_2": 999, "bonus_2": 0
+        "threshold_1": 35, "bonus_1": 0.3, "threshold_2": 45, "bonus_2": 0.5
     }
-    PROFIT_OPTIMIZATION["volume_spike_score"] = 0.0
+    PROFIT_OPTIMIZATION["volume_spike_threshold"] = 1.5
+    PROFIT_OPTIMIZATION["volume_spike_score"] = 0.5
+
+    OPTIMAL_PARAMS["sl_atr_mult"] = 0.8
+    OPTIMAL_PARAMS["leverage"] = 10
+    OPTIMAL_PARAMS["tf_leverage"] = 10
+    OPTIMAL_PARAMS["adx_min"] = 23
+    OPTIMAL_PARAMS["rsi_pull_long_hi"] = 43
+    OPTIMAL_PARAMS["rsi_pull_short_lo"] = 57
+    OPTIMAL_PARAMS["cooldown"] = 6
+    OPTIMAL_PARAMS["min_score"] = 2.0
+    OPTIMAL_PARAMS["bb_atr_margin"] = 0.35
 
     config = BacktestConfig(
         initial_capital=10000.0,
         fee_rate=0.0006,
         slippage_rate=0.0005,
-        leverage=15,
+        leverage=10,
+        exit_type="fixed_tp_sl",
         max_bars=48,
     )
     engine = BacktestEngine(config)
-    result = engine.run(df, strategy_name="v9.1_fixed", symbol="BTCUSDT")
+    result = engine.run(df, strategy_name="v10.0_baseline", symbol="BTCUSDT")
 
     # 복원
-    for k, v in original.items():
+    for k, v in original_opt.items():
         PROFIT_OPTIMIZATION[k] = v
+    for k, v in original_params.items():
+        OPTIMAL_PARAMS[k] = v
 
     return result
 
 
-def run_v10_backtest(df):
-    """v10.0 수익 극대화 전략 (변동성 적응 TP/SL)"""
+def run_v10_1_backtest(df):
+    """v10.1 개선 전략 (SL 1.2x, 레버리지 7x, 필터 강화)"""
     config = BacktestConfig(
         initial_capital=10000.0,
         fee_rate=0.0006,
         slippage_rate=0.0005,
-        leverage=15,
-        max_bars=48,
+        leverage=7,
+        exit_type="trailing",
+        atr_trailing_mult=1.0,
+        max_bars=72,
     )
     engine = BacktestEngine(config)
-    result = engine.run(df, strategy_name="v10.0_adaptive", symbol="BTCUSDT")
+    result = engine.run(df, strategy_name="v10.1_improved", symbol="BTCUSDT")
     return result
 
 
@@ -190,7 +209,7 @@ def print_result(result, label):
 
 def main():
     print("=" * 60)
-    print("  v10.0 수익 극대화 백테스트 비교")
+    print("  v10.1 데이터 기반 개선 백테스트 비교")
     print("  합성 BTC 데이터 90일 (다양한 시장 레짐)")
     print("=" * 60)
 
@@ -201,58 +220,67 @@ def main():
     print(f"  가격 범위: ${df['close'].min():,.0f} ~ ${df['close'].max():,.0f}")
 
     # Run backtests
-    print("\nv9.1 백테스트 실행 중...")
-    v9_result = run_v9_backtest(df)
+    print("\nv10.0 백테스트 실행 중...")
+    v10_0_result = run_v10_0_backtest(df)
 
-    print("v10.0 백테스트 실행 중...")
-    v10_result = run_v10_backtest(df)
+    print("v10.1 백테스트 실행 중...")
+    v10_1_result = run_v10_1_backtest(df)
 
     # Print results
-    print_result(v9_result, "v9.1 기존 전략 (고정 TP 2.0x / SL 0.8x)")
-    print_result(v10_result, "v10.0 수익 극대화 (변동성 적응 + ADX 보너스 + 거래량)")
+    print_result(v10_0_result, "v10.0 기존 (SL 0.8x / Lev 10x / fixed_tp_sl)")
+    print_result(v10_1_result, "v10.1 개선 (SL 1.2x / Lev 7x / trailing + 필터 강화)")
 
     # Comparison
     print(f"\n{'='*60}")
-    print(f"  비교 분석")
+    print(f"  비교 분석 (v10.0 → v10.1)")
     print(f"{'='*60}")
 
-    ret_diff = v10_result.total_return_pct - v9_result.total_return_pct
+    ret_diff = v10_1_result.total_return_pct - v10_0_result.total_return_pct
     print(f"  수익률 차이:   {ret_diff:+.2f}%p")
 
-    if v9_result.win_rate > 0:
-        wr_diff = v10_result.win_rate - v9_result.win_rate
+    if v10_0_result.win_rate > 0:
+        wr_diff = v10_1_result.win_rate - v10_0_result.win_rate
         print(f"  승률 차이:     {wr_diff:+.1f}%p")
 
-    pf_diff = v10_result.profit_factor - v9_result.profit_factor
+    pf_diff = v10_1_result.profit_factor - v10_0_result.profit_factor
     print(f"  수익팩터 차이: {pf_diff:+.2f}")
 
-    mdd_diff = v10_result.max_drawdown_pct - v9_result.max_drawdown_pct
+    mdd_diff = v10_1_result.max_drawdown_pct - v10_0_result.max_drawdown_pct
     print(f"  MDD 차이:      {mdd_diff:+.2f}%p ({'악화' if mdd_diff > 0 else '개선'})")
 
-    sharpe_diff = v10_result.sharpe_ratio - v9_result.sharpe_ratio
+    sharpe_diff = v10_1_result.sharpe_ratio - v10_0_result.sharpe_ratio
     print(f"  샤프 차이:     {sharpe_diff:+.2f}")
 
-    # v10.0 signal analysis
-    if v10_result.trades:
-        tp_trades = [t for t in v10_result.trades if t.exit_reason == "take_profit"]
-        sl_trades = [t for t in v10_result.trades if t.exit_reason == "stop_loss"]
-        print(f"\n  v10.0 TP 체결: {len(tp_trades)}회, SL 체결: {len(sl_trades)}회")
-        if tp_trades:
-            print(f"  TP 평균 수익:  ${np.mean([t.pnl for t in tp_trades]):.2f}")
-        if sl_trades:
-            print(f"  SL 평균 손실:  ${np.mean([t.pnl for t in sl_trades]):.2f}")
+    # v10.1 exit reason analysis
+    for label, result in [("v10.0", v10_0_result), ("v10.1", v10_1_result)]:
+        if result.trades:
+            tp_trades = [t for t in result.trades if t.exit_reason == "take_profit"]
+            sl_trades = [t for t in result.trades if t.exit_reason == "stop_loss"]
+            trail_trades = [t for t in result.trades if t.exit_reason == "trailing_stop"]
+            print(f"\n  {label}: TP {len(tp_trades)}회, SL {len(sl_trades)}회, Trailing {len(trail_trades)}회")
+            if tp_trades:
+                print(f"    TP 평균 수익:    ${np.mean([t.pnl for t in tp_trades]):.2f}")
+            if sl_trades:
+                print(f"    SL 평균 손실:    ${np.mean([t.pnl for t in sl_trades]):.2f}")
+            if trail_trades:
+                print(f"    Trail 평균 PnL:  ${np.mean([t.pnl for t in trail_trades]):.2f}")
 
     print(f"\n✅ 백테스트 완료")
 
     # Return verdict
-    if ret_diff > 0 and v10_result.profit_factor > v9_result.profit_factor:
-        print(f"📈 v10.0이 v9.1 대비 수익률 +{ret_diff:.1f}%p, 수익팩터 +{pf_diff:.2f} 개선")
+    mdd_improved = v10_1_result.max_drawdown_pct < v10_0_result.max_drawdown_pct
+    pf_improved = v10_1_result.profit_factor > v10_0_result.profit_factor
+    wr_improved = v10_1_result.win_rate > v10_0_result.win_rate
+
+    improvements = sum([mdd_improved, pf_improved, wr_improved])
+    if improvements >= 2:
+        print(f"📈 v10.1이 v10.0 대비 {improvements}/3 지표 개선")
         return True
-    elif ret_diff > 0:
-        print(f"📊 v10.0이 수익률은 개선되었으나 리스크 지표 확인 필요")
+    elif mdd_improved:
+        print(f"📊 v10.1이 MDD 개선됨 (생존률 향상), 추가 최적화 검토")
         return True
     else:
-        print(f"⚠️ v10.0이 v9.1 대비 개선 미흡 — 파라미터 조정 필요")
+        print(f"⚠️ v10.1 개선 미흡 — 추가 조정 필요")
         return False
 
 

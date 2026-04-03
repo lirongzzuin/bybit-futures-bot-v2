@@ -29,13 +29,29 @@ logger = setup_logger("collector")
 
 
 def _get_collector_db() -> sqlite3.Connection:
-    """데이터 수집 전용 DB 연결"""
+    """데이터 수집 전용 DB 연결 (v10.2: 견고한 초기화)"""
     db_dir = os.path.dirname(DB_PATH)
     collector_db_path = os.path.join(db_dir, "collector.db")
     os.makedirs(db_dir, exist_ok=True)
-    conn = sqlite3.connect(collector_db_path)
+
+    # v10.2: 0바이트 DB 파일 감지 → 자동 복구
+    if os.path.exists(collector_db_path):
+        try:
+            sz = os.path.getsize(collector_db_path)
+            if sz == 0:
+                logger.warning("collector.db가 0바이트 — 재생성합니다")
+                os.remove(collector_db_path)
+                # journal 파일도 정리
+                for ext in ["-journal", "-wal", "-shm"]:
+                    jpath = collector_db_path + ext
+                    if os.path.exists(jpath):
+                        os.remove(jpath)
+        except OSError:
+            pass
+
+    conn = sqlite3.connect(collector_db_path, timeout=10)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")  # 동시 읽기/쓰기 성능
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     _init_collector_tables(conn)
     return conn

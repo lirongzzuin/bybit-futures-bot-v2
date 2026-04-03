@@ -25,11 +25,11 @@ class BacktestConfig:
     initial_capital: float = 10000.0
     fee_rate: float = 0.0006       # 0.06% total (maker+taker avg)
     slippage_rate: float = 0.0005  # 0.05%
-    leverage: int = 15             # Default, overridden by signal
-    tp_sl_ratio: float = 1.5      # R:R ratio
-    atr_trailing_mult: float = 0.5  # Tight trailing for scalping
-    exit_type: str = "fixed_tp_sl"  # No trailing by default
-    max_bars: int = 48             # Time-based exit (48 x 15min = 12 hours)
+    leverage: int = 5              # v10.2: Default 5x (was 7x)
+    tp_sl_ratio: float = 1.67     # v10.2: R:R ratio (TP 2.5 / SL 1.5)
+    atr_trailing_mult: float = 1.2  # v10.2: trailing distance 1.2x ATR (was 1.0)
+    exit_type: str = "trailing"    # trailing stop enabled
+    max_bars: int = 96             # v10.2: 24h time exit (was 72=18h)
     use_signal_leverage: bool = True  # Use leverage from signal
     bars_per_day: int = 96         # 96 bars/day for 15min (used for Sharpe annualization)
 
@@ -126,7 +126,7 @@ class BacktestEngine:
             if position is not None:
                 # Apply trailing only for trend-following positions
                 if "trailing" in cfg.exit_type and atr > 0:
-                    if position.strategy == "trend":
+                    if position.strategy in ("trend", "pullback"):
                         mult = cfg.atr_trailing_mult
                         position = ExitCondition.update_trailing_stop(
                             position, current_price, atr, mult
@@ -273,7 +273,8 @@ class BacktestEngine:
                 if quantity > 0:
                     # Map sig_mode to string for per-mode trailing
                     sig_mode_val = int(row.get("sig_mode", 0))
-                    sig_mode_map = {0: "none", 1: "trend", 2: "range", 3: "transition"}
+                    # v10.2: sig_mode=1(pullback)은 trend로 매핑 → 트레일링 활성화
+                    sig_mode_map = {0: "none", 1: "pullback", 2: "range", 3: "transition"}
                     sig_mode_str = sig_mode_map.get(sig_mode_val, "none")
 
                     position = Position(

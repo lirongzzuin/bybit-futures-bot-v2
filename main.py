@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
-암호화폐 선물 자동매매 봇 — v10.0
+암호화폐 선물 자동매매 봇 — v10.2
 
-전략: Pullback-in-Trend v10.0 (4H 트렌드 + 15m 풀백 + 수익극대화)
+전략: Pullback-in-Trend v10.2 (4H 트렌드 + 15m 풀백 + 생존 최적화)
 거래소: Bybit USDT 무기한 선물
 타임프레임: 15분봉 (4H 리샘플링으로 상위 추세 확인)
 
-v10.0 변경사항:
-  - 변동성 적응 TP/SL (ATR 이동평균 대비 레짐별 자동 조정)
-  - ADX 강도 보너스 (강한 추세에서 TP 확대)
-  - 거래량 스파이크 확인 (스코어 가산)
-  - 변동성 적응 트레일링 SL
+v10.2 변경사항 (실전 데이터 기반 생존 최적화):
+  - SL 1.2x → 1.5x ATR: 노이즈 스톱아웃 추가 제거
+  - TP 2.0x → 2.5x ATR: R:R 1.67:1 유지
+  - 레버리지 7x → 5x: 연패 시 계좌 보존
+  - ADX >= 28 + 2봉 연속 추세 확인: 안정적 추세만 진입
+  - min_score 3.0: 최고 품질 시그널만 진입
+  - 최대 동시 포지션 1개: 상관 손실 방지
+  - 리스크 1.0%/거래, 일일 손실 한도 5%
+  - collector.db 데이터 수집 복구 및 강화
 
 실행: python main.py
 """
@@ -59,9 +63,9 @@ class TradingBot:
             self.mode_str = "메인넷"
         mode = self.mode_str
         logger.info("=" * 60)
-        logger.info(f"암호화폐 선물 자동매매 봇 v10.0")
+        logger.info(f"암호화폐 선물 자동매매 봇 v10.2")
         logger.info(f"  모드: {mode}")
-        logger.info(f"  전략: Pullback-in-Trend v10.0 (4H 트렌드 + 15m 풀백 + 수익극대화)")
+        logger.info(f"  전략: Pullback-in-Trend v10.2 (4H 트렌드 + 15m 풀백 + 수익극대화)")
         logger.info(f"  타임프레임: 15분봉 (4H 리샘플링)")
         logger.info(f"  TP {OPTIMAL_PARAMS['tp_atr_mult']}x / SL {OPTIMAL_PARAMS['sl_atr_mult']}x / {OPTIMAL_PARAMS['leverage']}x lev")
         logger.info(f"  ADX >= {OPTIMAL_PARAMS['adx_min']} | RSI Long {OPTIMAL_PARAMS['rsi_pull_long_lo']}-{OPTIMAL_PARAMS['rsi_pull_long_hi']} | RSI Short {OPTIMAL_PARAMS['rsi_pull_short_lo']}-{OPTIMAL_PARAMS['rsi_pull_short_hi']}")
@@ -92,9 +96,9 @@ class TradingBot:
         self.safe_mode = False
         self.running = True
 
-        # v8.0: 동일 심볼 재진입 쿨다운 (45분 — 과다 거래 방지)
+        # v10.2: 동일 심볼 재진입 쿨다운 (60분 — 과다 거래 방지)
         self._symbol_cooldown: dict[str, datetime] = {}
-        self.COOLDOWN_MINUTES = 45
+        self.COOLDOWN_MINUTES = 60
 
         # 데이터 수집기 초기화
         self.collector = DataCollector()
@@ -515,7 +519,7 @@ class TradingBot:
             # 진입 성공 시 시그널 ID + 변동성 레짐을 포지션에 연결
             if result and symbol in self.risk.state.open_positions:
                 self.risk.state.open_positions[symbol]["signal_journal_id"] = signal_journal_id
-                # v10.0: 변동성 레짐 저장 (트레일링 SL 적응에 사용)
+                # v10.1: 변동성 레짐 저장 (트레일링 SL 적응에 사용)
                 self.risk.state.open_positions[symbol]["vol_regime"] = signal_data.get("vol_regime", vol_regime)
 
             # v9.2: 드로우다운 이벤트 체크
@@ -744,7 +748,7 @@ class TradingBot:
 
         pos_list = list(self.risk.state.open_positions.keys())
         notify("봇 시작", (
-            f"Pullback-in-Trend v10.0 | {self.mode_str}\n"
+            f"Pullback-in-Trend v10.2 | {self.mode_str}\n"
             f"타임프레임: 15분봉 (4H 크로스검증)\n"
             f"모니터링: 거래량 상위 {len(self.strategy_symbols)}개 심볼\n"
             f"시장가 기준: 강도 >= {ORDER_TYPE_CONFIG['strong_signal_threshold']}\n"

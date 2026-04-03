@@ -83,25 +83,26 @@ class TestCanOpenPosition:
         assert can_open is True
 
     def test_can_open_position_max_reached(self):
-        """Should reject when max positions reached."""
+        """Should reject when max positions reached (v10.2: max=1)."""
         rm = RiskManager()
-        rm.state.open_positions = {"BTCUSDT": {}, "ETHUSDT": {}}
+        rm.state.open_positions = {"BTCUSDT": {}}
 
-        # Default max is 2
+        # Default max is 1 (v10.2)
         can_open, reason = rm.can_open_position("XRPUSDT")
 
         assert can_open is False
         assert "최대 포지션" in reason or "max" in reason.lower()
 
     def test_can_open_position_duplicate_symbol(self):
-        """Should reject duplicate symbol."""
+        """Should reject duplicate symbol or max positions."""
         rm = RiskManager()
         rm.state.open_positions = {"BTCUSDT": {}}
 
         can_open, reason = rm.can_open_position("BTCUSDT")
 
         assert can_open is False
-        assert "이미" in reason or "already" in reason.lower()
+        assert ("이미" in reason or "already" in reason.lower()
+                or "최대 포지션" in reason)
 
     def test_can_open_position_daily_halt(self):
         """Should reject when daily trade halted."""
