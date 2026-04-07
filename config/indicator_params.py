@@ -53,16 +53,16 @@ ORDER_TYPE_CONFIG = {
 # === Profit Optimization v13.0 ===
 PROFIT_OPTIMIZATION = {
     "vol_tp_scale": {
-        "extreme": 3.0,    # v13.0: 극한 변동성에서 더 큰 TP (was 2.5)
-        "high": 2.7,        # was 2.2
-        "normal": 2.5,      # was 2.0
-        "low": 2.0,         # was 1.8
+        "extreme": 2.0,     # v14.1: TP 축소 (달성률 우선)
+        "high": 1.8,
+        "normal": 1.5,      # 최적화 결과: R:R 1.25:1 + 높은 승률
+        "low": 1.3,
     },
     "vol_sl_scale": {
-        "extreme": 1.5,     # 고변동시 넓은 SL
-        "high": 1.2,        # v14.0 (was 1.3)
-        "normal": 1.0,      # v14.0 (was 1.2): R:R 2.0:1
-        "low": 0.8,         # v14.0 (was 1.0): 저변동시 타이트
+        "extreme": 1.5,
+        "high": 1.3,
+        "normal": 1.2,      # 최적화 결과
+        "low": 1.0,
     },
     "adx_tp_bonus": {
         "threshold_1": 30,   # was 35 — 더 자주 보너스 적용
