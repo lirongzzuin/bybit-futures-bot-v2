@@ -19,28 +19,29 @@ from typing import Optional
 
 
 OPTIMAL_PARAMS = {
-    "strategy_type": "pullback_in_trend_v13.0",
+    "strategy_type": "pullback_in_trend_v14.0",
     # 4H indicators
     "htf_ema_fast": 9,
     "htf_ema_mid": 21,
     "htf_rsi_period": 14,
     "htf_adx_period": 14,
-    # v13.0 — 거래 빈도 + 수익률 극대화
-    "adx_min": 20,                   # 중간 추세도 포착 (30→20)
-    "rsi_pull_long_lo": 25,          # 풀백 하한 (20→25: 과매도 너무 깊으면 역추세)
-    "rsi_pull_long_hi": 50,          # 넓은 풀백 구간 (35→50)
-    "rsi_pull_short_lo": 50,         # 넓은 바운스 구간 (65→50)
-    "rsi_pull_short_hi": 75,         # 바운스 상한 (80→75)
-    "tp_atr_mult": 2.5,             # TP 2.5x ATR (was 2.0)
-    "sl_atr_mult": 1.2,             # SL 1.2x ATR (was 0.8) → 노이즈 스톱 방지
+    # v14.0 — 실전 데이터 기반 최적화 (v9.1 수익 파라미터 + 실전 교훈)
+    # 문제: v13.0 ADX20/RSI50/score1.5 → 롱만 발생, 약한 시그널 진입, 연속 손절
+    "adx_min": 25,                   # v9.1 복원 (was 20): 중간 추세 이상
+    "rsi_pull_long_lo": 25,          # 풀백 하한
+    "rsi_pull_long_hi": 40,          # v9.1 기반 (was 50): 실제 풀백 구간만
+    "rsi_pull_short_lo": 60,         # v9.1 기반 (was 50): 실제 바운스 구간만
+    "rsi_pull_short_hi": 75,         # 바운스 상한
+    "tp_atr_mult": 2.0,             # v9.1 복원 (was 2.5): 달성 가능한 TP
+    "sl_atr_mult": 1.0,             # 적정 SL (was 1.2): R:R 2.0:1
     "leverage": 10,                  # 기본 레버리지
-    "cooldown": 2,                   # 2봉(30분) 기본 쿨다운 (was 4)
-    "cooldown_after_sl": 1,          # SL 후 1봉(15분) — 즉시 재진입 (was 2)
-    "min_score": 1.5,                # 최소 스코어 완화 (2.5→1.5)
-    "bb_atr_margin": 1.0,           # BB 근접 마진 대폭 완화 (0.3→1.0)
-    # 동적 레버리지 (v13.0)
-    "max_leverage": 20,              # 최대 20x
-    "leverage_score_threshold": 2.5, # was 3.0
+    "cooldown": 4,                   # 4봉(1시간) 쿨다운 (was 2: 너무 빠른 재진입)
+    "cooldown_after_sl": 2,          # SL 후 30분 (was 1: 너무 빠름)
+    "min_score": 2.0,                # v9.1 복원 (was 1.5): 품질 보장
+    "bb_atr_margin": 0.35,          # v9.1 복원 (was 1.0): BB 근접 필수
+    # 동적 레버리지
+    "max_leverage": 20,
+    "leverage_score_threshold": 3.0, # 복원 (was 2.5)
     "leverage_boost_per_point": 5.0,
     # Shared
     "tf_leverage": 10,
@@ -54,11 +55,11 @@ OPTIMAL_PARAMS = {
 }
 
 ENGINE_CONFIG = {
-    "risk_per_trade": 0.02,       # 2% — 빈도 높이되 리스크 분산
-    "use_trailing_stop": False,   # v13.1: 트레일링 제거 — 고정 TP/SL이 수익률 극대화
+    "risk_per_trade": 0.02,       # 2%
+    "use_trailing_stop": False,   # 고정 TP/SL (trailing은 수익 조기 청산 원인)
     "trailing_activation_atr": 1.5,
     "trailing_distance_atr": 1.0,
-    "max_daily_loss": 0.15,       # 15%
+    "max_daily_loss": 0.10,       # 10% (was 15%: 너무 관대)
     "time_exit_bars": 48,         # 12h
 }
 
@@ -288,9 +289,9 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
         if cur_adx < adx_min:
             continue
 
-        # v13.0: DI 방향만 확인 (EMA 교차는 보너스 스코어로 전환)
-        bullish_4h = h_pdi[h_idx] > h_mdi[h_idx]
-        bearish_4h = h_mdi[h_idx] > h_pdi[h_idx]
+        # v14.0: DI 방향 + EMA 정렬 필수 (v13.0에서 EMA를 보너스로 전환 → 롱 편향 원인)
+        bullish_4h = (h_pdi[h_idx] > h_mdi[h_idx] and h_ef[h_idx] > h_em[h_idx])
+        bearish_4h = (h_mdi[h_idx] > h_pdi[h_idx] and h_ef[h_idx] < h_em[h_idx])
 
         if not bullish_4h and not bearish_4h:
             continue
@@ -299,58 +300,52 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
         score = 0.0
 
         # ═══════════════════════════════════════════════════════════
-        # 15m PULLBACK ENTRY (v13.0: 넓은 풀백 구간)
+        # 15m PULLBACK ENTRY (v14.0: 실전 검증된 풀백 구간)
         # ═══════════════════════════════════════════════════════════
         if bullish_4h and rsi_long_lo <= l_rsi[i] <= rsi_long_hi:
-            score += 1.0  # 기본 점수 (was 1.5 — min_score 낮아짐)
+            score += 1.5
 
-            # v13.0: BB 근접은 보너스 (필터 아님)
-            if not np.isnan(l_bbl[i]) and c[i] <= l_bbl[i] + l_atr[i] * bb_margin:
-                score += 0.5  # BB 하단 근접 보너스
+            # v14.0: BB 근접 필수 (v13.0에서 보너스 → 품질 하락 원인)
+            if c[i] > l_bbl[i] + l_atr[i] * bb_margin:
+                continue  # BB 하단 근접하지 않으면 스킵
 
-            # v13.0: EMA 근접은 보너스 (필터 아님)
-            if c[i] <= l_em[i] + l_atr[i] * 0.8:
-                score += 0.5
+            # EMA21 근접 보너스
+            if c[i] <= l_em[i] + l_atr[i] * 0.3:
+                score += 1.0
 
-            # v13.0: 4H EMA 정렬 보너스
-            if h_ef[h_idx] > h_em[h_idx]:
-                score += 0.5
-
-            # MACD 개선 (1봉도 OK)
+            # MACD 개선 (2봉 연속 우대)
             if (i >= 2 and not np.isnan(l_macd_hist[i]) and
                     not np.isnan(l_macd_hist[i-1]) and not np.isnan(l_macd_hist[i-2])):
                 if l_macd_hist[i] > l_macd_hist[i-1] > l_macd_hist[i-2]:
-                    score += 0.7  # 2봉 연속
+                    score += 0.7
                 elif l_macd_hist[i] > l_macd_hist[i-1]:
-                    score += 0.4  # 1봉 개선 (was 0.3)
+                    score += 0.4
 
             # RSI bouncing up
             if i > 0 and not np.isnan(l_rsi[i-1]):
                 if l_rsi[i] > l_rsi[i-1]:
-                    score += 0.3
+                    score += 0.5
 
             # 캔들 패턴 확인
             bull_pat, _ = detect_candle_patterns(o, h, lo, c, i)
             if bull_pat >= 0.5:
                 score += min(bull_pat, 0.7)
 
-            # v13.0: ADX 강도 보너스
+            # ADX 강도 보너스
             if cur_adx >= 35:
                 score += 0.3
 
             direction = 1
 
         elif bearish_4h and rsi_short_lo <= l_rsi[i] <= rsi_short_hi:
-            score += 1.0
+            score += 1.5
 
-            if not np.isnan(l_bbu[i]) and c[i] >= l_bbu[i] - l_atr[i] * bb_margin:
-                score += 0.5
+            # v14.0: BB 근접 필수
+            if c[i] < l_bbu[i] - l_atr[i] * bb_margin:
+                continue
 
-            if c[i] >= l_em[i] - l_atr[i] * 0.8:
-                score += 0.5
-
-            if h_ef[h_idx] < h_em[h_idx]:
-                score += 0.5
+            if c[i] >= l_em[i] - l_atr[i] * 0.3:
+                score += 1.0
 
             if (i >= 2 and not np.isnan(l_macd_hist[i]) and
                     not np.isnan(l_macd_hist[i-1]) and not np.isnan(l_macd_hist[i-2])):
@@ -361,7 +356,7 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
 
             if i > 0 and not np.isnan(l_rsi[i-1]):
                 if l_rsi[i] < l_rsi[i-1]:
-                    score += 0.3
+                    score += 0.5
 
             _, bear_pat = detect_candle_patterns(o, h, lo, c, i)
             if bear_pat >= 0.5:

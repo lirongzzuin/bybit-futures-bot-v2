@@ -21,15 +21,15 @@ ICHIMOKU = {
 }
 VOLUME = {"ma_length": 20}
 
-# === Trading Config v13.0 ===
+# === Trading Config v14.0 — 실전 검증 기반 ===
 TRADING = {
     "exchange": "bybit",
     "default_leverage": 10,
-    "max_leverage": 20,             # 동적 레버리지 최대
+    "max_leverage": 20,
     "default_timeframe": "15",
-    "risk_per_trade": 0.02,          # v13.0: 2% (빈도↑ 리스크↓, was 3%)
-    "max_open_positions": 5,         # v13.0: 5개 (was 3) — 다중 심볼 활용
-    "max_daily_loss": 0.15,          # v13.0: 15% (was 10%) — 기회 확대
+    "risk_per_trade": 0.02,          # 2%
+    "max_open_positions": 3,         # v14.0: 3개 (was 5: 동일방향 5개 → 동시 손절)
+    "max_daily_loss": 0.10,          # v14.0: 10% (was 15%: 너무 관대)
 }
 
 DAILY_CANDLE_PROTECTION = {
@@ -59,10 +59,10 @@ PROFIT_OPTIMIZATION = {
         "low": 2.0,         # was 1.8
     },
     "vol_sl_scale": {
-        "extreme": 1.5,     # v13.0: 넓은 SL로 노이즈 방지 (was 1.2)
-        "high": 1.3,         # was 1.0
-        "normal": 1.2,      # was 0.8 — 핵심 변경!
-        "low": 1.0,          # was 0.7
+        "extreme": 1.5,     # 고변동시 넓은 SL
+        "high": 1.2,        # v14.0 (was 1.3)
+        "normal": 1.0,      # v14.0 (was 1.2): R:R 2.0:1
+        "low": 0.8,         # v14.0 (was 1.0): 저변동시 타이트
     },
     "adx_tp_bonus": {
         "threshold_1": 30,   # was 35 — 더 자주 보너스 적용

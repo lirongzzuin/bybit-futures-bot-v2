@@ -96,7 +96,7 @@ class TradingBot:
         self.safe_mode = False
         self.running = True
 
-        # v13.0: 동일 심볼 재진입 쿨다운 (10분 — 빈도 증가, was 15분)
+        # v14.0: 동일 심볼 재진입 쿨다운 (15분)
         self._symbol_cooldown: dict[str, datetime] = {}
         self.COOLDOWN_MINUTES = 15
 

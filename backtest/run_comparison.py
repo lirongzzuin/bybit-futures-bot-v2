@@ -122,13 +122,13 @@ def run_v10_2_backtest(df):
 
 
 def run_v11_0_backtest(df):
-    """v13.1 공격적 빈도 전략 (고정 TP/SL)"""
+    """v14.0 실전 검증 전략 (고정 TP/SL)"""
     config = BacktestConfig(
         initial_capital=10000.0, leverage=10,
         exit_type="fixed_tp_sl", max_bars=48,
     )
     engine = BacktestEngine(config)
-    result = engine.run(df, strategy_name="v13.1_fixed_tpsl", symbol="BTCUSDT")
+    result = engine.run(df, strategy_name="v14.0_proven", symbol="BTCUSDT")
     return result
 
 
