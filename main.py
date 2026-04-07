@@ -441,16 +441,33 @@ class TradingBot:
 
             side = "long" if direction == 1 else "short"
 
-            # TP/SL 계산
+            # TP/SL 계산 (v14.1: 최소 거리 보장)
             tp_mult = signal_data["tp_atr_mult"]
             sl_mult = signal_data["sl_atr_mult"]
 
+            tp_dist = atr * tp_mult
+            sl_dist = atr * sl_mult
+
+            # v14.1: 최소 TP/SL 거리 보장 (가격 대비 최소 %)
+            # ATR이 너무 작으면 노이즈에 SL 히트 → 연속 손절 원인
+            MIN_SL_PCT = 0.015  # 최소 SL 거리 1.5%
+            MIN_TP_PCT = 0.020  # 최소 TP 거리 2.0%
+            min_sl_dist = price * MIN_SL_PCT
+            min_tp_dist = price * MIN_TP_PCT
+
+            if sl_dist < min_sl_dist:
+                logger.info(f"[{symbol}] SL 거리 보정: {sl_dist/price*100:.2f}% → {MIN_SL_PCT*100}% (ATR 너무 작음)")
+                sl_dist = min_sl_dist
+            if tp_dist < min_tp_dist:
+                logger.info(f"[{symbol}] TP 거리 보정: {tp_dist/price*100:.2f}% → {MIN_TP_PCT*100}% (ATR 너무 작음)")
+                tp_dist = min_tp_dist
+
             if side == "long":
-                tp_price = price + atr * tp_mult
-                sl_price = price - atr * sl_mult
+                tp_price = price + tp_dist
+                sl_price = price - sl_dist
             else:
-                tp_price = price - atr * tp_mult
-                sl_price = price + atr * sl_mult
+                tp_price = price - tp_dist
+                sl_price = price + sl_dist
 
             # 주문 타입 결정 로그
             order_type = "시장가" if strength >= ORDER_TYPE_CONFIG["strong_signal_threshold"] else "지정가"
