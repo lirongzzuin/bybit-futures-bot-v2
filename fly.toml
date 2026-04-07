@@ -9,9 +9,9 @@ primary_region = "nrt"  # 도쿄 (Bybit 서버에 가까움)
   BYBIT_TESTNET = "false"
   PAPER_TRADING = "false"
 
-# 무료 티어: shared-cpu-1x, 256MB
+# v13.1: 512MB (30심볼 + 5분 분석 + 10초 모니터링)
 [[vm]]
-  memory = "256mb"
+  memory = "512mb"
   cpu_kind = "shared"
   cpus = 1
 
