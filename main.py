@@ -570,7 +570,7 @@ class TradingBot:
         # 모든 모니터링 심볼 처리 (전략 심볼 + 보유 포지션 심볼)
         for symbol in self.symbols:
             self.process_symbol(symbol)
-            time.sleep(0.3)
+            time.sleep(0.15)  # v14.1: 0.15초 (was 0.3)
 
         # 현황 출력
         balance = self.client.get_balance()
@@ -761,7 +761,8 @@ class TradingBot:
             schedule.every().hour.at(f":{minute}").do(self.on_candle_close)
 
         # v13.0: 10초 모니터링 (was 30초)
-        schedule.every(10).seconds.do(self.monitor)
+        # v14.1: 5초 모니터링 (포지션 보유 시 빠른 TP/SL 감지)
+        schedule.every(5).seconds.do(self.monitor)
 
         # 정기 브리핑: KST 09:00 / 15:00 / 21:00 / 03:00 -> UTC 00:00 / 06:00 / 12:00 / 18:00
         for hour in ["00:00", "06:00", "12:00", "18:00"]:
@@ -781,7 +782,7 @@ class TradingBot:
         while self.running:
             try:
                 schedule.run_pending()
-                time.sleep(2)  # v13.0: 2초 메인루프 (was 5초)
+                time.sleep(1)  # v14.1: 1초 메인루프 (최대 실시간성)
                 consecutive_errors = 0
             except KeyboardInterrupt:
                 self.running = False
