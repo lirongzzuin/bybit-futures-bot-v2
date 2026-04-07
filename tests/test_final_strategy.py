@@ -343,7 +343,7 @@ class TestOptimalParamsRegression:
         assert OPTIMAL_PARAMS["tp_atr_mult"] == 1.5
         assert OPTIMAL_PARAMS["sl_atr_mult"] == 1.2
         assert OPTIMAL_PARAMS["leverage"] == 10
-        assert OPTIMAL_PARAMS["min_score"] == 3.0
+        assert OPTIMAL_PARAMS["min_score"] == 2.5
         assert OPTIMAL_PARAMS["bb_atr_margin"] == 0.35
 
 

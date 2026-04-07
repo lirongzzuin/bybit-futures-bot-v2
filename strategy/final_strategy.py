@@ -37,7 +37,7 @@ OPTIMAL_PARAMS = {
     "leverage": 10,                  # 기본 레버리지
     "cooldown": 4,                   # 4봉(1시간)
     "cooldown_after_sl": 2,          # SL 후 30분
-    "min_score": 3.0,                # 최적화 결과: 3.0 (고품질만)
+    "min_score": 2.5,                # 2.5 (3.0은 시그널 너무 적음 — 실전 검증)
     "bb_atr_margin": 0.35,          # BB 근접 필수
     # 동적 레버리지
     "max_leverage": 20,

@@ -568,9 +568,14 @@ class TradingBot:
             self.pos_monitor.check_position_closures()
 
         # 모든 모니터링 심볼 처리 (전략 심볼 + 보유 포지션 심볼)
+        signal_count = 0
         for symbol in self.symbols:
             self.process_symbol(symbol)
-            time.sleep(0.15)  # v14.1: 0.15초 (was 0.3)
+            time.sleep(0.15)
+
+        # v14.1: 시그널 발생 현황 로그 (디버깅용)
+        open_pos = len(self.risk.state.open_positions)
+        logger.info(f"  분석 완료: {len(self.symbols)}개 심볼 | 보유 {open_pos}개 포지션")
 
         # 현황 출력
         balance = self.client.get_balance()
