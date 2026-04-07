@@ -1,7 +1,7 @@
 """
-Indicator & Trading Parameters v12.0 — Maximum Profit & Win Rate
-- 승률 80%+ / 연 수익률 10,000%+ 목표
-- 강한 추세 + 깊은 풀백 + 동적 레버리지 10~20x
+Indicator & Trading Parameters v13.0 — Aggressive Frequency & Profit
+- 거래 빈도 극대화 + 수익률 최적화
+- 중간 추세 + 넓은 풀백 + 동적 레버리지 8~20x
 """
 
 CANDLE_MASTER_PLAN = {
@@ -21,15 +21,15 @@ ICHIMOKU = {
 }
 VOLUME = {"ma_length": 20}
 
-# === Trading Config v12.0 ===
+# === Trading Config v13.0 ===
 TRADING = {
     "exchange": "bybit",
     "default_leverage": 10,
-    "max_leverage": 20,             # v12.0: 20x (동적 레버리지 최대)
+    "max_leverage": 20,             # 동적 레버리지 최대
     "default_timeframe": "15",
-    "risk_per_trade": 0.03,          # v12.0: 3% (공격적)
-    "max_open_positions": 3,
-    "max_daily_loss": 0.10,          # v12.0: 10%
+    "risk_per_trade": 0.02,          # v13.0: 2% (빈도↑ 리스크↓, was 3%)
+    "max_open_positions": 5,         # v13.0: 5개 (was 3) — 다중 심볼 활용
+    "max_daily_loss": 0.15,          # v13.0: 15% (was 10%) — 기회 확대
 }
 
 DAILY_CANDLE_PROTECTION = {
@@ -45,32 +45,32 @@ DAILY_CANDLE_PROTECTION = {
 FEES = {"maker": 0.0002, "taker": 0.00055}
 
 ORDER_TYPE_CONFIG = {
-    "strong_signal_threshold": 0.85,  # v12.0: 더 많은 시장가 (빠른 체결)
+    "strong_signal_threshold": 0.70,  # v13.0: 더 많은 시장가 (빠른 체결, was 0.85)
     "limit_offset_atr_mult": 0.1,
-    "limit_timeout_seconds": 180,     # v12.0: 3분 (was 5분)
+    "limit_timeout_seconds": 120,     # v13.0: 2분 (was 3분)
 }
 
-# === Profit Optimization v12.0 ===
+# === Profit Optimization v13.0 ===
 PROFIT_OPTIMIZATION = {
     "vol_tp_scale": {
-        "extreme": 2.5,
-        "high": 2.2,
-        "normal": 2.0,
-        "low": 1.8,
+        "extreme": 3.0,    # v13.0: 극한 변동성에서 더 큰 TP (was 2.5)
+        "high": 2.7,        # was 2.2
+        "normal": 2.5,      # was 2.0
+        "low": 2.0,         # was 1.8
     },
     "vol_sl_scale": {
-        "extreme": 1.2,
-        "high": 1.0,
-        "normal": 0.8,     # 타이트 SL = 높은 R:R
-        "low": 0.7,
+        "extreme": 1.5,     # v13.0: 넓은 SL로 노이즈 방지 (was 1.2)
+        "high": 1.3,         # was 1.0
+        "normal": 1.2,      # was 0.8 — 핵심 변경!
+        "low": 1.0,          # was 0.7
     },
     "adx_tp_bonus": {
-        "threshold_1": 35,
+        "threshold_1": 30,   # was 35 — 더 자주 보너스 적용
         "bonus_1": 0.3,
-        "threshold_2": 45,
+        "threshold_2": 40,   # was 45
         "bonus_2": 0.5,
     },
-    "volume_spike_threshold": 1.5,
+    "volume_spike_threshold": 1.3,  # was 1.5 — 약한 볼륨 스파이크도 포착
     "volume_spike_score": 0.3,
     "atr_avg_period": 50,
 }
@@ -78,5 +78,7 @@ PROFIT_OPTIMIZATION = {
 SYMBOLS = {
     "primary": "BTCUSDT",
     "alts": ["ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
-             "DOGEUSDT", "TRXUSDT", "HBARUSDT"],
+             "DOGEUSDT", "TRXUSDT", "HBARUSDT",
+             "AVAXUSDT", "LINKUSDT", "BNBUSDT",
+             "MATICUSDT", "DOTUSDT"],  # v13.0: 12개 알트 (was 7)
 }

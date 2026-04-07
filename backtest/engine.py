@@ -25,10 +25,10 @@ class BacktestConfig:
     initial_capital: float = 10000.0
     fee_rate: float = 0.0006       # 0.06% total (maker+taker avg)
     slippage_rate: float = 0.0005  # 0.05%
-    leverage: int = 10             # v12.0: 10x base (동적 10~20x)
-    tp_sl_ratio: float = 2.5      # R:R 2.5:1 (TP 2.0 / SL 0.8)
-    atr_trailing_mult: float = 0.8  # 타이트 트레일링
-    exit_type: str = "trailing"
+    leverage: int = 10             # 10x base (동적 8~20x)
+    tp_sl_ratio: float = 2.08     # R:R 2.08:1 (TP 2.5 / SL 1.2)
+    atr_trailing_mult: float = 1.0
+    exit_type: str = "fixed_tp_sl"  # v13.1: 고정 TP/SL (trailing이 수익 죽임)
     max_bars: int = 48             # v12.0: 12h (빠른 손절)
     use_signal_leverage: bool = True  # Use leverage from signal
     bars_per_day: int = 96         # 96 bars/day for 15min (used for Sharpe annualization)

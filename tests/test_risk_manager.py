@@ -83,12 +83,15 @@ class TestCanOpenPosition:
         assert can_open is True
 
     def test_can_open_position_max_reached(self):
-        """Should reject when max positions reached (v11.0: max=3)."""
+        """Should reject when max positions reached (v13.0: max=5)."""
         rm = RiskManager()
-        rm.state.open_positions = {"BTCUSDT": {}, "ETHUSDT": {}, "SOLUSDT": {}}
+        rm.state.open_positions = {
+            "BTCUSDT": {}, "ETHUSDT": {}, "SOLUSDT": {},
+            "XRPUSDT": {}, "ADAUSDT": {},
+        }
 
-        # Default max is 3 (v11.0)
-        can_open, reason = rm.can_open_position("XRPUSDT")
+        # Default max is 5 (v13.0)
+        can_open, reason = rm.can_open_position("DOGEUSDT")
 
         assert can_open is False
         assert "최대 포지션" in reason or "max" in reason.lower()
@@ -113,29 +116,26 @@ class TestCanOpenPosition:
         assert can_open is False
         assert "일일 최대 손실" in reason or "halt" in reason.lower()
 
-    def test_can_open_position_circuit_breaker(self):
-        """Should reject when circuit breaker triggered (v11.0: 30% threshold)."""
+    def test_can_open_position_no_circuit_breaker(self):
+        """v13.1: Circuit breaker removed — should allow trading even with drawdown."""
         rm = RiskManager()
         rm.state.peak_balance = 10000.0
-        rm.state.current_balance = 6900.0  # 31% drawdown
+        rm.state.current_balance = 5000.0  # 50% drawdown
 
         can_open, reason = rm.can_open_position("BTCUSDT")
-
-        assert can_open is False
-        assert "circuit" in reason.lower() or "drawdown" in reason.lower()
+        # Circuit breaker removed, should allow (unless emergency close triggers)
+        assert can_open is True
 
     def test_can_open_position_emergency_close(self):
-        """Should reject when balance too low."""
+        """Should reject when balance too low (v13.1: 30% threshold)."""
         rm = RiskManager(initial_balance=10000.0)
         rm.state.peak_balance = 10000.0
-        rm.state.current_balance = 4999.0  # Less than 50%
+        rm.state.current_balance = 2900.0  # Less than 30%
 
         can_open, reason = rm.can_open_position("BTCUSDT")
 
         assert can_open is False
-        # Circuit breaker or emergency close check
-        assert ("circuit" in reason.lower() or "drawdown" in reason.lower() or
-                "긴급" in reason or "emergency" in reason.lower())
+        assert "긴급" in reason or "emergency" in reason.lower()
 
 
 class TestPositionSizing:
@@ -258,38 +258,38 @@ class TestDrawdownFactor:
         factor = rm.get_drawdown_factor()
         assert factor == 1.0
 
-    def test_get_drawdown_factor_10_percent(self):
-        """Test factor at 10% drawdown (v11.0: still 1.0 under 15%)."""
+    def test_get_drawdown_factor_15_percent(self):
+        """Test factor at 15% drawdown (v13.0: still 1.0 under 20%)."""
         rm = RiskManager()
         rm.state.peak_balance = 10000.0
-        rm.state.current_balance = 9000.0  # 10%
+        rm.state.current_balance = 8500.0  # 15%
 
         factor = rm.get_drawdown_factor()
         assert factor == 1.0
 
-    def test_get_drawdown_factor_20_percent(self):
-        """Test factor at 20% drawdown (v11.0: 0.75)."""
+    def test_get_drawdown_factor_25_percent(self):
+        """Test factor at 25% drawdown (v13.0: 0.75 for 20-35%)."""
         rm = RiskManager()
         rm.state.peak_balance = 10000.0
-        rm.state.current_balance = 8000.0  # 20%
+        rm.state.current_balance = 7500.0  # 25%
 
         factor = rm.get_drawdown_factor()
         assert factor == 0.75
 
-    def test_get_drawdown_factor_30_percent(self):
-        """Test factor at 28% drawdown (v11.0: 0.5 for 25-35% range)."""
+    def test_get_drawdown_factor_40_percent(self):
+        """Test factor at 40% drawdown (v13.0: 0.5 for 35-50%)."""
         rm = RiskManager()
         rm.state.peak_balance = 10000.0
-        rm.state.current_balance = 7200.0  # 28%
+        rm.state.current_balance = 6000.0  # 40%
 
         factor = rm.get_drawdown_factor()
         assert factor == 0.5
 
     def test_get_drawdown_factor_extreme(self):
-        """Test factor at 35%+ drawdown."""
+        """Test factor at 50%+ drawdown."""
         rm = RiskManager()
         rm.state.peak_balance = 10000.0
-        rm.state.current_balance = 6000.0  # 40%
+        rm.state.current_balance = 4500.0  # 55%
 
         factor = rm.get_drawdown_factor()
         assert factor == 0.3
@@ -338,10 +338,10 @@ class TestCircuitBreaker:
         assert "OK" in reason or "Circuit" in reason
 
     def test_check_circuit_breaker_triggered(self):
-        """Test circuit breaker when triggered (v11.0: 30% threshold)."""
+        """Test circuit breaker when triggered (v13.0: 50% threshold)."""
         rm = RiskManager()
         rm.state.peak_balance = 10000.0
-        rm.state.current_balance = 6900.0  # 31% drawdown (above 30%)
+        rm.state.current_balance = 4900.0  # 51% drawdown (above 50%)
 
         can_trade, reason = rm.check_circuit_breaker()
 
@@ -396,9 +396,9 @@ class TestEmergencyClose:
         assert should_close is False
 
     def test_should_emergency_close_true(self):
-        """Test should_emergency_close returns True at threshold."""
+        """Test should_emergency_close returns True at threshold (v13.0: 40%)."""
         rm = RiskManager(initial_balance=10000.0)
-        rm.state.current_balance = 4999.0  # < 50%
+        rm.state.current_balance = 3999.0  # < 40%
 
         should_close = rm.should_emergency_close()
         assert should_close is True

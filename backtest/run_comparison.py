@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-v11.0 Aggressive Profit Runner — 다기간 백테스트 비교
+v13.0 Aggressive Profit Runner — 다기간 백테스트 비교
 - 상승장, 하락장, 횡보장, 고변동장, 혼합장 각각 테스트
-- v10.2 (보수적) vs v11.0 (공격적) 비교
+- v10.2 (보수적) vs v13.0 (공격적) 비교
 """
 import sys
 import os
@@ -122,13 +122,13 @@ def run_v10_2_backtest(df):
 
 
 def run_v11_0_backtest(df):
-    """v11.0 공격적 전략 (현재 파라미터 그대로)"""
+    """v13.1 공격적 빈도 전략 (고정 TP/SL)"""
     config = BacktestConfig(
         initial_capital=10000.0, leverage=10,
-        exit_type="trailing", atr_trailing_mult=0.8, max_bars=72,
+        exit_type="fixed_tp_sl", max_bars=48,
     )
     engine = BacktestEngine(config)
-    result = engine.run(df, strategy_name="v11.0_aggressive", symbol="BTCUSDT")
+    result = engine.run(df, strategy_name="v13.1_fixed_tpsl", symbol="BTCUSDT")
     return result
 
 
@@ -154,7 +154,7 @@ def print_result(result, label):
 
 def main():
     print("=" * 60)
-    print("  v11.0 Aggressive Profit Runner — 다기간 백테스트")
+    print("  v13.0 Aggressive Profit Runner — 다기간 백테스트")
     print("=" * 60)
 
     market_types = [
@@ -180,7 +180,7 @@ def main():
         v110 = run_v11_0_backtest(df)
 
         print_result(v102, "v10.2 보수적")
-        print_result(v110, "v11.0 공격적")
+        print_result(v110, "v13.0 공격적")
 
         total_v102["return"] += v102.total_return_pct
         total_v102["trades"] += v102.total_trades
@@ -197,7 +197,7 @@ def main():
     v102_wr = total_v102["wins"] / max(total_v102["trades"], 1) * 100
     v110_wr = total_v110["wins"] / max(total_v110["trades"], 1) * 100
     print(f"  v10.2: 평균 수익률 {total_v102['return']/n:+.1f}% | 총 거래 {total_v102['trades']}회 | 승률 {v102_wr:.0f}%")
-    print(f"  v11.0: 평균 수익률 {total_v110['return']/n:+.1f}% | 총 거래 {total_v110['trades']}회 | 승률 {v110_wr:.0f}%")
+    print(f"  v13.0: 평균 수익률 {total_v110['return']/n:+.1f}% | 총 거래 {total_v110['trades']}회 | 승률 {v110_wr:.0f}%")
     print(f"  개선: {(total_v110['return']-total_v102['return'])/n:+.1f}%p 수익률 | {v110_wr-v102_wr:+.0f}%p 승률")
 
 
