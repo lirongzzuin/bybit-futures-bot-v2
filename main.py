@@ -792,8 +792,8 @@ class TradingBot:
             schedule.every().hour.at(f":{minute}").do(self.on_candle_close)
 
         # v15.0: 10초 모니터링 (was 30초)
-        # v15.0: 5초 모니터링
-        schedule.every(5).seconds.do(self.monitor)
+        # v15.0: 2초 모니터링 (rate limit 15%만 사용, 충분히 안전)
+        schedule.every(2).seconds.do(self.monitor)
 
         # 정기 브리핑: KST 09:00 / 15:00 / 21:00 / 03:00 -> UTC 00:00 / 06:00 / 12:00 / 18:00
         for hour in ["00:00", "06:00", "12:00", "18:00"]:
