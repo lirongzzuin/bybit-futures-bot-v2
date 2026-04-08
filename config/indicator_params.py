@@ -21,15 +21,15 @@ ICHIMOKU = {
 }
 VOLUME = {"ma_length": 20}
 
-# === Trading Config v14.0 — 실전 검증 기반 ===
+# === Trading Config v15.0 — 5m+1H Momentum Scalper ===
 TRADING = {
     "exchange": "bybit",
     "default_leverage": 10,
-    "max_leverage": 20,
-    "default_timeframe": "15",
-    "risk_per_trade": 0.02,          # 2%
-    "max_open_positions": 3,         # v14.0: 3개 (was 5: 동일방향 5개 → 동시 손절)
-    "max_daily_loss": 0.10,          # v14.0: 10% (was 15%: 너무 관대)
+    "max_leverage": 15,              # v15.0: 15x (20x는 리스크 과다)
+    "default_timeframe": "5",        # v15.0: 5분봉 (was 15분)
+    "risk_per_trade": 0.02,
+    "max_open_positions": 3,
+    "max_daily_loss": 0.10,
 }
 
 DAILY_CANDLE_PROTECTION = {
@@ -50,19 +50,19 @@ ORDER_TYPE_CONFIG = {
     "limit_timeout_seconds": 120,     # v13.0: 2분 (was 3분)
 }
 
-# === Profit Optimization v13.0 ===
+# === Profit Optimization v15.0 ===
 PROFIT_OPTIMIZATION = {
     "vol_tp_scale": {
-        "extreme": 2.0,     # v14.1: TP 축소 (달성률 우선)
-        "high": 1.8,
-        "normal": 1.5,      # 최적화 결과: R:R 1.25:1 + 높은 승률
-        "low": 1.3,
+        "extreme": 2.5,
+        "high": 2.2,
+        "normal": 2.0,      # R:R 2.0:1
+        "low": 1.8,
     },
     "vol_sl_scale": {
         "extreme": 1.5,
-        "high": 1.3,
-        "normal": 1.2,      # 최적화 결과
-        "low": 1.0,
+        "high": 1.2,
+        "normal": 1.0,      # R:R 2.0:1
+        "low": 0.8,
     },
     "adx_tp_bonus": {
         "threshold_1": 30,   # was 35 — 더 자주 보너스 적용
