@@ -2,9 +2,9 @@
 """
 암호화폐 선물 자동매매 봇 — v15.0
 
-전략: Pullback-in-Trend v15.0 (4H 트렌드 + 15m 풀백 + 생존 최적화)
+전략: Momentum Scalper v15.0 (1H 추세 + 5m 진입)
 거래소: Bybit USDT 무기한 선물
-타임프레임: 15분봉 (4H 리샘플링으로 상위 추세 확인)
+타임프레임: 5분봉 (1H 리샘플링으로 상위 추세 확인)
 
 v15.0 변경사항 (실전 데이터 기반 생존 최적화):
   - SL 1.2x → 1.5x ATR: 노이즈 스톱아웃 추가 제거
@@ -65,8 +65,8 @@ class TradingBot:
         logger.info("=" * 60)
         logger.info(f"암호화폐 선물 자동매매 봇 v15.0")
         logger.info(f"  모드: {mode}")
-        logger.info(f"  전략: Pullback-in-Trend v15.0 (4H 트렌드 + 15m 풀백 + 수익극대화)")
-        logger.info(f"  타임프레임: 15분봉 (4H 리샘플링)")
+        logger.info(f"  전략: Momentum Scalper v15.0 (1H 추세 + 5m 진입)")
+        logger.info(f"  타임프레임: 5분봉 진입 (1H 리샘플링 추세 확인)")
         logger.info(f"  TP {OPTIMAL_PARAMS['tp_atr_mult']}x / SL {OPTIMAL_PARAMS['sl_atr_mult']}x / {OPTIMAL_PARAMS['leverage']}x lev")
         logger.info(f"  ADX >= {OPTIMAL_PARAMS['adx_min']} | RSI Long {OPTIMAL_PARAMS['rsi_pull_long_lo']}-{OPTIMAL_PARAMS['rsi_pull_long_hi']} | RSI Short {OPTIMAL_PARAMS['rsi_pull_short_lo']}-{OPTIMAL_PARAMS['rsi_pull_short_hi']}")
         logger.info(f"  리스크: 거래당 {ENGINE_CONFIG['risk_per_trade']*100}%")
@@ -326,7 +326,7 @@ class TradingBot:
     def process_symbol(self, symbol: str):
         """심볼별 시그널 처리"""
         try:
-            # 1. 데이터 수집 (15분봉 500개 — 4H 리샘플링에 충분)
+            # 1. 데이터 수집 (5분봉 500개 — 1H 리샘플링에 충분)
             df = self.fetch_data(symbol)
             if df.empty or len(df) < 100:
                 return
@@ -378,7 +378,7 @@ class TradingBot:
                 except Exception as e:
                     logger.debug(f"[{symbol}] 데이터 수집 경고: {e}")
 
-            # 3. 기존 포지션 동적 관리 (15분봉 시그널 기반)
+            # 3. 기존 포지션 동적 관리 (5분봉 시그널 기반)
             if symbol in self.risk.state.open_positions:
                 self.pos_monitor.manage_existing_position(symbol, signal_data=signal_data)
 
@@ -549,10 +549,10 @@ class TradingBot:
 
 
     def on_candle_close(self):
-        """15분봉 캔들 완성 시 실행"""
+        """5분봉 캔들 완성 시 실행"""
         now = datetime.now(timezone.utc)
         logger.info(f"\n{'='*50}")
-        logger.info(f"15min 캔들 완성 -- {now.strftime('%Y-%m-%d %H:%M')} UTC")
+        logger.info(f"5min 캔들 완성 -- {now.strftime('%Y-%m-%d %H:%M')} UTC")
 
         self.risk.reset_daily()
 
@@ -771,7 +771,7 @@ class TradingBot:
         pos_list = list(self.risk.state.open_positions.keys())
         notify("봇 시작", (
             f"Pullback-in-Trend v15.0 | {self.mode_str}\n"
-            f"타임프레임: 15분봉 (4H 크로스검증)\n"
+            f"타임프레임: 5분봉 (1H 크로스검증)\n"
             f"모니터링: 거래량 상위 {len(self.strategy_symbols)}개 심볼\n"
             f"시장가 기준: 강도 >= {ORDER_TYPE_CONFIG['strong_signal_threshold']}\n"
             f"수수료: Maker 0.02% / Taker 0.055%\n"
