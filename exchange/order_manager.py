@@ -207,9 +207,8 @@ class OrderManager:
         )
         qty *= size_mult
 
-        # v7.6: 포지션당 최대 마진 = 가용잔고의 20% (실전 안전장치 강화)
-        # 데이터: 노셔널 $100+ = WR 33%, <$30 = WR 100% → 작은 포지션이 유리
-        max_margin_ratio = 0.20
+        # v15.0: 포지션당 최대 마진 = 가용잔고의 30% (승률 개선 후 비중 확대)
+        max_margin_ratio = 0.30
         max_qty = (available * max_margin_ratio * lev) / entry_price
         qty = min(qty, max_qty)
 

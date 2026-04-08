@@ -60,7 +60,7 @@ OPTIMAL_PARAMS = {
 }
 
 ENGINE_CONFIG = {
-    "risk_per_trade": 0.02,       # 2%
+    "risk_per_trade": 0.04,       # 4% (승률 개선 확인 후 비중 확대)
     "use_trailing_stop": False,   # 고정 TP/SL
     "trailing_activation_atr": 1.5,
     "trailing_distance_atr": 1.0,

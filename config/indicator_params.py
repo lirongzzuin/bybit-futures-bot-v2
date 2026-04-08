@@ -27,7 +27,7 @@ TRADING = {
     "default_leverage": 10,
     "max_leverage": 15,              # v15.0: 15x (20x는 리스크 과다)
     "default_timeframe": "5",        # v15.0: 5분봉 (was 15분)
-    "risk_per_trade": 0.02,
+    "risk_per_trade": 0.04,          # 4% (승률 확인 후 비중 확대)
     "max_open_positions": 3,
     "max_daily_loss": 0.10,
 }
