@@ -1,6 +1,12 @@
 app = "your-fly-app-name"
 primary_region = "nrt"  # 도쿄 (Bybit 서버에 가까움)
 
+# v15.0: 머신 자동 중지 방지 (봇은 24/7 실행)
+[http_service]
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
 [build]
 
 [env]
