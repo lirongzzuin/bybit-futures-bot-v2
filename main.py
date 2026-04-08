@@ -219,6 +219,15 @@ class TradingBot:
 
             logger.info(f"  총 {len(positions)}개 기존 포지션 동기화 완료")
 
+            # v15.0: 동기화된 포지션 텔레그램 알림
+            if positions:
+                pos_lines = []
+                for p in positions:
+                    side = "🟢 LONG" if p["side"] == "Buy" else "🔴 SHORT"
+                    pnl = p.get("unrealized_pnl", 0)
+                    pos_lines.append(f"{side} {p['symbol']} pnl:{pnl:+.4f}")
+                notify("📋 기존 포지션 동기화", "\n".join(pos_lines), level="trade")
+
         except Exception as e:
             logger.error(f"  포지션 동기화 실패: {e}", exc_info=True)
 
