@@ -6,7 +6,7 @@ from utils.logger import setup_logger
 
 logger = setup_logger("position_monitor")
 
-COOLDOWN_MINUTES = 45
+COOLDOWN_MINUTES = 10  # v13.0: 10분 (was 45분) — 빠른 재진입
 
 
 class PositionMonitor:
@@ -184,7 +184,7 @@ class PositionMonitor:
                 except Exception:
                     pass
 
-        # === Stage 0: 안전장치 ===
+        # === Stage 0: 안전장치 (SL + TP 자동 설정) ===
         if sl == 0 or (side == "long" and sl <= 0) or (side == "short" and sl <= 0):
             default_sl_pct = 0.05
             if side == "long":
@@ -198,6 +198,21 @@ class PositionMonitor:
                 logger.info(f"[{symbol}] SL 없음 → 기본 SL 설정: {emergency_sl}")
             except Exception as e:
                 logger.warning(f"[{symbol}] 기본 SL 실패: {e}")
+
+        # v15.0: TP 없을 때 자동 설정 (동기화된 포지션 등)
+        if tp == 0 or tp is None:
+            default_tp_pct = 0.03  # 기본 TP 3%
+            if side == "long":
+                auto_tp = self.client.round_price(symbol, entry * (1 + default_tp_pct))
+            else:
+                auto_tp = self.client.round_price(symbol, entry * (1 - default_tp_pct))
+            try:
+                self.client.set_tp_sl(symbol, take_profit=auto_tp, position_idx=pos_idx)
+                pos_info["tp"] = auto_tp
+                tp = auto_tp
+                logger.info(f"[{symbol}] TP 없음 → 기본 TP 설정: {auto_tp} (+{default_tp_pct*100}%)")
+            except Exception as e:
+                logger.warning(f"[{symbol}] 기본 TP 설정 실패: {e}")
 
         # 급락 긴급 청산: -5% (v7.6: was -8% → 대형 손실 방지)
         if unrealized_pct <= -0.05:
