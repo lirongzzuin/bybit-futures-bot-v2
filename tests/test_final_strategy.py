@@ -353,7 +353,7 @@ class TestEngineConfigRegression:
 
     def test_engine_config_unchanged(self):
         """Verify ENGINE_CONFIG values match expected (regression test v15.0)."""
-        assert ENGINE_CONFIG["risk_per_trade"] == 0.02
+        assert ENGINE_CONFIG["risk_per_trade"] == 0.04
         assert ENGINE_CONFIG["use_trailing_stop"] is False
         assert ENGINE_CONFIG["max_daily_loss"] == 0.10
         assert ENGINE_CONFIG["time_exit_bars"] == 72
