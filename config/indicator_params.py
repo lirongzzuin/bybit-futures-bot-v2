@@ -21,15 +21,15 @@ ICHIMOKU = {
 }
 VOLUME = {"ma_length": 20}
 
-# === Trading Config v15.0 — 5m+1H Momentum Scalper ===
+# === Trading Config v16.0 — 실전 데이터 기반 최적화 ===
 TRADING = {
     "exchange": "bybit",
-    "default_leverage": 10,
-    "max_leverage": 15,              # v15.0: 15x (20x는 리스크 과다)
-    "default_timeframe": "5",        # v15.0: 5분봉 (was 15분)
-    "risk_per_trade": 0.04,          # 4% (승률 확인 후 비중 확대)
-    "max_open_positions": 5,         # 동시 5포지션
-    "max_daily_loss": 0.10,
+    "default_leverage": 7,           # v16.0: 급등락 생존 (10→7)
+    "max_leverage": 12,              # v16.0: 12x (15→12)
+    "default_timeframe": "5",
+    "risk_per_trade": 0.03,          # v16.0: 3% (4→3: 급등락 대비)
+    "max_open_positions": 3,         # v16.0: 3개 (5→3: 동시 손절 방지)
+    "max_daily_loss": 0.08,          # v16.0: 8% (10→8)
 }
 
 DAILY_CANDLE_PROTECTION = {

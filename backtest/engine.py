@@ -25,11 +25,11 @@ class BacktestConfig:
     initial_capital: float = 10000.0
     fee_rate: float = 0.0006       # 0.06% total (maker+taker avg)
     slippage_rate: float = 0.0005  # 0.05%
-    leverage: int = 10             # 10x base (동적 8~20x)
+    leverage: int = 7              # v16.0: 7x base
     tp_sl_ratio: float = 2.08     # R:R 2.08:1 (TP 2.5 / SL 1.2)
     atr_trailing_mult: float = 1.0
     exit_type: str = "fixed_tp_sl"  # v13.1: 고정 TP/SL (trailing이 수익 죽임)
-    max_bars: int = 48             # v12.0: 12h (빠른 손절)
+    max_bars: int = 36             # v16.0: 3시간 (빠른 손절)
     use_signal_leverage: bool = True  # Use leverage from signal
     bars_per_day: int = 96         # 96 bars/day for 15min (used for Sharpe annualization)
 
@@ -176,13 +176,13 @@ class BacktestEngine:
                             exit_price = current_price
                             reason = "reverse_signal"
 
-                # Time-based exit
+                # v16.0: Time-based exit — 손실 중일 때만 청산 (수익 중이면 유지)
                 if exit_price is None and cfg.max_bars > 0 and bars_held >= cfg.max_bars:
                     if position.side == "long":
                         progress = (current_price - position.entry_price) / atr if atr > 0 else 0
                     else:
                         progress = (position.entry_price - current_price) / atr if atr > 0 else 0
-                    if progress < 0.3:  # Less than 0.3 ATR profit after max_bars
+                    if progress < 0:  # 손실 중일 때만 time_exit
                         exit_price = current_price
                         reason = "time_exit"
 

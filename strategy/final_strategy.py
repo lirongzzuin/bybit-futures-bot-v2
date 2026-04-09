@@ -18,27 +18,28 @@ from typing import Optional
 
 
 OPTIMAL_PARAMS = {
-    "strategy_type": "momentum_scalper_v15.0",
+    "strategy_type": "momentum_scalper_v16.0",
     # 1H indicators (HTF — was 4H)
     "htf_ema_fast": 9,
     "htf_ema_mid": 21,
     "htf_rsi_period": 14,
     "htf_adx_period": 14,
     # Entry params (5m — was 15m)
-    "adx_min": 20,                   # 1H ADX (4H보다 민감, 20이면 충분)
+    # v16.0 — 실전 데이터 기반 (개선A: BTC +63.4%, 현재 대비 +96%p)
+    "adx_min": 25,                   # 강한 추세만 (20→25: 약한 추세 진입 방지)
     "rsi_pull_long_lo": 25,
-    "rsi_pull_long_hi": 45,          # 5m RSI는 더 넓게 (빠른 TF)
-    "rsi_pull_short_lo": 55,
+    "rsi_pull_long_hi": 40,          # 실제 풀백만 (45→40)
+    "rsi_pull_short_lo": 60,         # 실제 바운스만 (55→60)
     "rsi_pull_short_hi": 75,
     "tp_atr_mult": 2.0,             # TP 2.0x ATR
-    "sl_atr_mult": 1.0,             # SL 1.0x ATR → R:R 2.0:1
-    "leverage": 10,
-    "cooldown": 6,                   # 6봉 = 30분 (5m × 6)
+    "sl_atr_mult": 1.2,             # SL 1.2x ATR (1.0→1.2: 노이즈 SL 방지)
+    "leverage": 7,                   # 7x (10→7: 급등락 생존)
+    "cooldown": 6,                   # 6봉 = 30분
     "cooldown_after_sl": 3,          # SL 후 15분
-    "min_score": 2.0,
-    "bb_atr_margin": 0.5,           # 5m은 노이즈 많아 BB 마진 넓게
+    "min_score": 2.5,                # 품질 보장 (2.0→2.5)
+    "bb_atr_margin": 0.35,          # BB 근접 필수 (0.5→0.35)
     # 동적 레버리지
-    "max_leverage": 15,              # 15x 최대 (20x는 리스크 과다)
+    "max_leverage": 12,              # 12x 최대 (급등락 생존)
     "leverage_score_threshold": 3.0,
     "leverage_boost_per_point": 3.0,
     # 최소 TP/SL 거리 (가격 대비 %)
@@ -60,12 +61,12 @@ OPTIMAL_PARAMS = {
 }
 
 ENGINE_CONFIG = {
-    "risk_per_trade": 0.04,       # 4% (승률 개선 확인 후 비중 확대)
+    "risk_per_trade": 0.03,       # 3% (급등락 대비 축소)
     "use_trailing_stop": False,   # 고정 TP/SL
     "trailing_activation_atr": 1.5,
     "trailing_distance_atr": 1.0,
-    "max_daily_loss": 0.10,       # 10%
-    "time_exit_bars": 72,         # 72 × 5분 = 6시간 (빠른 손절)
+    "max_daily_loss": 0.08,       # 8% (급등락 대비)
+    "time_exit_bars": 36,         # 36 × 5분 = 3시간 (빠른 손절 — 6시간→3시간)
 }
 
 
