@@ -335,23 +335,23 @@ class TestOptimalParamsRegression:
     """Regression tests for OPTIMAL_PARAMS."""
 
     def test_optimal_params_unchanged(self):
-        """Verify OPTIMAL_PARAMS values match expected (regression test v16.0)."""
-        assert OPTIMAL_PARAMS["strategy_type"] == "momentum_scalper_v16.0"
-        assert OPTIMAL_PARAMS["adx_min"] == 25
-        assert OPTIMAL_PARAMS["rsi_pull_long_hi"] == 40
-        assert OPTIMAL_PARAMS["rsi_pull_short_lo"] == 60
-        assert OPTIMAL_PARAMS["tp_atr_mult"] == 2.0
-        assert OPTIMAL_PARAMS["sl_atr_mult"] == 1.2
-        assert OPTIMAL_PARAMS["leverage"] == 7
-        assert OPTIMAL_PARAMS["min_score"] == 2.5
+        """Verify OPTIMAL_PARAMS values match expected (regression test v17.0)."""
+        assert OPTIMAL_PARAMS["strategy_type"] == "momentum_scalper_v17.0"
+        assert OPTIMAL_PARAMS["adx_min"] == 28
+        assert OPTIMAL_PARAMS["rsi_pull_long_hi"] == 35
+        assert OPTIMAL_PARAMS["rsi_pull_short_lo"] == 65
+        assert OPTIMAL_PARAMS["tp_atr_mult"] == 2.5
+        assert OPTIMAL_PARAMS["sl_atr_mult"] == 1.5
+        assert OPTIMAL_PARAMS["leverage"] == 5
+        assert OPTIMAL_PARAMS["min_score"] == 3.0
 
 
 class TestEngineConfigRegression:
     """Regression tests for ENGINE_CONFIG."""
 
     def test_engine_config_unchanged(self):
-        """Verify ENGINE_CONFIG values match expected (regression test v16.0)."""
-        assert ENGINE_CONFIG["risk_per_trade"] == 0.03
+        """Verify ENGINE_CONFIG values match expected (regression test v17.0)."""
+        assert ENGINE_CONFIG["risk_per_trade"] == 0.015
         assert ENGINE_CONFIG["use_trailing_stop"] is False
-        assert ENGINE_CONFIG["max_daily_loss"] == 0.08
+        assert ENGINE_CONFIG["max_daily_loss"] == 0.05
         assert ENGINE_CONFIG["time_exit_bars"] == 36

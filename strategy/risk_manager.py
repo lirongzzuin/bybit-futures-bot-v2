@@ -1,15 +1,15 @@
 """
-리스크 관리 시스템 v13.0 — Aggressive Frequency Trading
+리스크 관리 시스템 v17.0 — 실전 손실 분석 기반 생존 최적화
 
 안전장치:
-  1. 고정비율(2%) 포지션 사이징 + 드로우다운 팩터
-  2. 최대 동시 포지션: 5개 (다중 심볼 활용)
-  3. 일일 최대 손실: 15% → 당일 매매 중단
-  4. 5연패 시 사이즈 50% 축소 (was 3연패)
-  5. 최대 레버리지: 20배 (동적)
-  6. 긴급 청산: 잔고 40% 이하 시 전 포지션 청산
-  7. Circuit breaker: MDD 50% → 1시간 쿨링 후 자동 리셋
-  8. 심볼별 상관관계 0.85 이상 동시 진입 제한
+  1. 고정비율(1.5%) 포지션 사이징 + 드로우다운 팩터 (10%부터 적용)
+  2. 최대 동시 포지션: 2개 (상관 손실 최소화)
+  3. 일일 최대 손실: 5% → 당일 매매 중단
+  4. 4연패 시 사이즈 50% 축소 (7→4: 조기 보호)
+  5. 최대 레버리지: 8배 (동적)
+  6. 긴급 청산: 잔고 50% 이하 시 전 포지션 청산
+  7. Circuit breaker: MDD 30% → 2시간 쿨링 후 자동 리셋
+  8. 심볼별 상관관계 0.80 이상 동시 진입 제한
 """
 import numpy as np
 import pandas as pd
@@ -40,8 +40,8 @@ class RiskState:
 
 
 class RiskManager:
-    # Circuit breaker configuration (v13.0: 대폭 완화)
-    MDD_CIRCUIT_BREAKER_PCT = 0.50  # 50% max drawdown threshold (was 30%)
+    # Circuit breaker configuration (v17.0: 조기 보호)
+    MDD_CIRCUIT_BREAKER_PCT = 0.30  # v17.0: 30% max drawdown threshold (50→30: 조기 보호)
 
     def __init__(self, initial_balance: float = 10000.0):
         # v13.1: peak_balance = current_balance (클린 스타트)
@@ -116,23 +116,23 @@ class RiskManager:
     def get_drawdown_factor(self) -> float:
         """
         Drawdown-based position sizing factor.
-        Returns a scaling factor based on current drawdown from peak equity:
+        v17.0: 10%부터 조기 적용 (20%→10%)
         - Drawdown < 10%: factor = 1.0 (normal)
-        - Drawdown 10-20%: factor = 0.7 (reduce size)
-        - Drawdown 20-30%: factor = 0.5 (significantly reduce)
-        - Drawdown > 30%: factor = 0.3 (minimal size)
+        - Drawdown 10-15%: factor = 0.7 (reduce size)
+        - Drawdown 15-25%: factor = 0.5 (significantly reduce)
+        - Drawdown > 25%: factor = 0.3 (minimal size)
         """
         if self.state.peak_balance <= 0:
             return 1.0
 
         drawdown = (self.state.peak_balance - self.state.current_balance) / self.state.peak_balance
 
-        # v13.0: 드로다운 팩터 대폭 완화 (거래 기회 유지)
-        if drawdown < 0.20:
+        # v17.0: 드로다운 팩터 조기 적용 (계좌 보존 우선)
+        if drawdown < 0.10:
             return 1.0
-        elif drawdown < 0.35:
-            return 0.75
-        elif drawdown < 0.50:
+        elif drawdown < 0.15:
+            return 0.7
+        elif drawdown < 0.25:
             return 0.5
         else:
             return 0.3
@@ -160,8 +160,8 @@ class RiskManager:
         else:
             return "normal"
 
-    # v13.0: Circuit breaker 쿨링 시간 (1시간 — 즉시 복귀)
-    CIRCUIT_BREAKER_COOLDOWN_HOURS = 1
+    # v17.0: Circuit breaker 쿨링 시간 (2시간 — 충분한 냉각)
+    CIRCUIT_BREAKER_COOLDOWN_HOURS = 2
 
     def check_circuit_breaker(self) -> tuple[bool, str]:
         """
@@ -206,8 +206,11 @@ class RiskManager:
 
     def can_open_position(self, symbol: str, simulated_time: datetime = None) -> tuple[bool, str]:
         """새 포지션 개설 가능 여부 확인"""
-        # v13.1: Circuit breaker 제거 — 거래 차단 원인이었음
-        # 이전 세션 MDD 누적으로 시작 즉시 발동 → 거래 0건 문제 해결
+        # v17.0: Circuit breaker 복원 (MDD 30% 조기 보호)
+        # v13.1에서 제거했으나, 50%→30%로 낮추고 peak_balance 초기화 문제 해결
+        cb_ok, cb_msg = self.check_circuit_breaker()
+        if not cb_ok:
+            return False, cb_msg
 
         # 1. 일봉 전환 시간대 진입 차단
         if DAILY_CANDLE_PROTECTION.get("block_new_entries", True) and self.is_daily_candle_transition(simulated_time):
@@ -252,13 +255,12 @@ class RiskManager:
         leverage = leverage or TRADING["default_leverage"]
         leverage = min(leverage, TRADING["max_leverage"])
 
-        # v11.0: 공격적 포지션 사이징 — 2.5% 고정
-        risk_pct = TRADING["risk_per_trade"]  # 2.5%
+        risk_pct = TRADING["risk_per_trade"]  # v17.0: 1.5%
 
-        # v13.1: 연속 손실 시 사이즈 축소 (7연패부터, was 5연패)
-        if self.state.consecutive_losses >= 7:
-            risk_pct *= 0.7
-            logger.warning(f"연속 {self.state.consecutive_losses}패 — 포지션 사이즈 30% 축소")
+        # v17.0: 연속 손실 시 사이즈 축소 (4연패부터, 7→4: 조기 보호)
+        if self.state.consecutive_losses >= 4:
+            risk_pct *= 0.5
+            logger.warning(f"연속 {self.state.consecutive_losses}패 — 포지션 사이즈 50% 축소")
 
         # 드로우다운 팩터 적용
         drawdown_factor = self.get_drawdown_factor()
@@ -305,8 +307,8 @@ class RiskManager:
             self.state.consecutive_losses = 0
 
     def should_emergency_close(self) -> bool:
-        """긴급 청산 조건 확인 (v13.0: 40% 이하, was 50%)"""
-        return self.state.current_balance <= self.state.initial_balance * 0.4
+        """긴급 청산 조건 확인 (v17.0: 50% 이하, 40→50: 조기 보호)"""
+        return self.state.current_balance <= self.state.initial_balance * 0.5
 
     def get_effective_leverage(self, requested: int) -> int:
         """실효 레버리지 (최대 제한 적용)"""
@@ -321,14 +323,14 @@ class RiskManager:
 
     def is_correlated(self, symbol: str, existing_symbols: list,
                       returns_data: dict) -> bool:
-        """기존 포지션과 상관관계 0.85 이상인지 체크 (v13.0: 0.8→0.85)"""
+        """기존 포지션과 상관관계 0.80 이상인지 체크 (v17.0: 0.85→0.80)"""
         if symbol not in returns_data:
             return False
 
         for existing in existing_symbols:
             if existing in returns_data:
                 corr = self.calc_correlation(returns_data[symbol], returns_data[existing])
-                if abs(corr) >= 0.85:
+                if abs(corr) >= 0.80:
                     logger.warning(f"{symbol}-{existing} 상관계수 {corr:.2f} — 동시 진입 제한")
                     return True
         return False

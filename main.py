@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """
-암호화폐 선물 자동매매 봇 — v15.0
+암호화폐 선물 자동매매 봇 — v17.0
 
-전략: Momentum Scalper v15.0 (1H 추세 + 5m 진입)
+전략: Momentum Scalper v17.0 (1H 추세 + 5m 진입)
 거래소: Bybit USDT 무기한 선물
 타임프레임: 5분봉 (1H 리샘플링으로 상위 추세 확인)
 
-v15.0 변경사항 (실전 데이터 기반 생존 최적화):
-  - SL 1.2x → 1.5x ATR: 노이즈 스톱아웃 추가 제거
-  - TP 2.0x → 2.5x ATR: R:R 1.67:1 유지
-  - 레버리지 7x → 5x: 연패 시 계좌 보존
-  - ADX >= 28 + 2봉 연속 추세 확인: 안정적 추세만 진입
+v17.0 변경사항 (실전 손실 분석 기반 생존 최적화):
+  - ADX 28+ 2봉 연속 추세 확인: 강한 추세만 진입
+  - RSI 풀백 범위 축소: Long 25-35, Short 65-75
   - min_score 3.0: 최고 품질 시그널만 진입
-  - 최대 동시 포지션 1개: 상관 손실 방지
-  - 리스크 1.0%/거래, 일일 손실 한도 5%
-  - collector.db 데이터 수집 복구 및 강화
+  - TP 2.5x / SL 1.5x ATR: R:R 1.67:1, 넓은 SL로 노이즈 방지
+  - 레버리지 5x (max 8x): 손실 증폭 방지
+  - 리스크 1.5%/거래: 연패 시 계좌 보존
+  - 최대 동시 포지션 2개, 일일 손실 한도 5%
+  - 본전 보호 1.5%, 트레일링 2.5%부터: 수익 거래 조기 종료 방지
+  - 연속 4패부터 50% 사이즈 축소: 조기 보호
+  - Circuit breaker 복원: MDD 30% → 2시간 쿨링
 
 실행: python main.py
 """
@@ -63,9 +65,9 @@ class TradingBot:
             self.mode_str = "메인넷"
         mode = self.mode_str
         logger.info("=" * 60)
-        logger.info(f"암호화폐 선물 자동매매 봇 v15.0")
+        logger.info(f"암호화폐 선물 자동매매 봇 v17.0")
         logger.info(f"  모드: {mode}")
-        logger.info(f"  전략: Momentum Scalper v15.0 (1H 추세 + 5m 진입)")
+        logger.info(f"  전략: Momentum Scalper v17.0 (1H 추세 + 5m 진입)")
         logger.info(f"  타임프레임: 5분봉 진입 (1H 리샘플링 추세 확인)")
         logger.info(f"  TP {OPTIMAL_PARAMS['tp_atr_mult']}x / SL {OPTIMAL_PARAMS['sl_atr_mult']}x / {OPTIMAL_PARAMS['leverage']}x lev")
         logger.info(f"  ADX >= {OPTIMAL_PARAMS['adx_min']} | RSI Long {OPTIMAL_PARAMS['rsi_pull_long_lo']}-{OPTIMAL_PARAMS['rsi_pull_long_hi']} | RSI Short {OPTIMAL_PARAMS['rsi_pull_short_lo']}-{OPTIMAL_PARAMS['rsi_pull_short_hi']}")
@@ -457,10 +459,9 @@ class TradingBot:
             tp_dist = atr * tp_mult
             sl_dist = atr * sl_mult
 
-            # v15.0 1: 최소 TP/SL 거리 보장 (가격 대비 최소 %)
-            # ATR이 너무 작으면 노이즈에 SL 히트 → 연속 손절 원인
-            MIN_SL_PCT = 0.015  # 최소 SL 거리 1.5%
-            MIN_TP_PCT = 0.020  # 최소 TP 거리 2.0%
+            # v17.0: 최소 TP/SL 거리 보장 (전략 파라미터와 동기화)
+            MIN_SL_PCT = OPTIMAL_PARAMS.get("min_sl_pct", 0.015)  # 최소 SL 거리
+            MIN_TP_PCT = OPTIMAL_PARAMS.get("min_tp_pct", 0.020)  # 최소 TP 거리
             min_sl_dist = price * MIN_SL_PCT
             min_tp_dist = price * MIN_TP_PCT
 

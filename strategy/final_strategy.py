@@ -1,16 +1,17 @@
 """
-Momentum Scalper v15.0 — 5m + 1H 타임프레임
+Momentum Scalper v17.0 — 실전 손실 분석 기반 최적화
 
-근본적 재설계: 15m+4H → 5m+1H
-- 4H는 코인 선물에 너무 느림 (추세 변화 4시간 후 감지)
-- 5m 진입 + 1H 추세 → 3배 빠른 반응, 3배 많은 거래
+v17.0 핵심 변경 (실전 데이터 분석 결과):
+  문제: 초반 익절 후 연패로 손실 — 승률 35%, 평균 손실 > 평균 수익
+  원인: 트레일링 SL 너무 타이트, 레버리지 과다, 약한 추세 진입
 
-핵심:
-  1. 1H 추세 확인 (ADX + EMA) → 방향 결정 (롱/숏 모두)
-  2. 5m RSI 풀백 + BB 근접 → 진입 타이밍
-  3. 최소 TP 1.5% / SL 1.0% 보장 → 노이즈 손절 방지
-  4. 고정 TP/SL → 수익 구조 보장
-  5. 수수료 고려: Maker 0.02%, Taker 0.055%
+  해결:
+  1. ADX 28+ 강한 추세만 진입 (25→28)
+  2. RSI 풀백 범위 축소: 깊은 풀백만 (Long 25-35, Short 65-75)
+  3. min_score 3.0: 최고 품질 시그널만
+  4. TP 2.5x / SL 1.5x ATR: R:R 1.67:1 유지, SL 넓혀서 노이즈 방지
+  5. 레버리지 5x 기본, 8x 최대: 손실 증폭 방지
+  6. 리스크 1.5%/거래: 연패 시 계좌 보존
 """
 import numpy as np
 import pandas as pd
@@ -18,33 +19,33 @@ from typing import Optional
 
 
 OPTIMAL_PARAMS = {
-    "strategy_type": "momentum_scalper_v16.0",
-    # 1H indicators (HTF — was 4H)
+    "strategy_type": "momentum_scalper_v17.0",
+    # 1H indicators (HTF)
     "htf_ema_fast": 9,
     "htf_ema_mid": 21,
     "htf_rsi_period": 14,
     "htf_adx_period": 14,
-    # Entry params (5m — was 15m)
-    # v16.0 — 실전 데이터 기반 (개선A: BTC +63.4%, 현재 대비 +96%p)
-    "adx_min": 25,                   # 강한 추세만 (20→25: 약한 추세 진입 방지)
+    # Entry params (5m)
+    # v17.0 — 실전 손실 분석 기반 최적화
+    "adx_min": 28,                   # v17.0: 강한 추세만 (25→28)
     "rsi_pull_long_lo": 25,
-    "rsi_pull_long_hi": 40,          # 실제 풀백만 (45→40)
-    "rsi_pull_short_lo": 60,         # 실제 바운스만 (55→60)
+    "rsi_pull_long_hi": 35,          # v17.0: 깊은 풀백만 (40→35)
+    "rsi_pull_short_lo": 65,         # v17.0: 깊은 바운스만 (60→65)
     "rsi_pull_short_hi": 75,
-    "tp_atr_mult": 2.0,             # TP 2.0x ATR
-    "sl_atr_mult": 1.2,             # SL 1.2x ATR (1.0→1.2: 노이즈 SL 방지)
-    "leverage": 7,                   # 7x (10→7: 급등락 생존)
-    "cooldown": 6,                   # 6봉 = 30분
-    "cooldown_after_sl": 3,          # SL 후 15분
-    "min_score": 2.5,                # 품질 보장 (2.0→2.5)
-    "bb_atr_margin": 0.35,          # BB 근접 필수 (0.5→0.35)
+    "tp_atr_mult": 2.5,             # v17.0: TP 2.5x ATR (2.0→2.5: 큰 수익)
+    "sl_atr_mult": 1.5,             # v17.0: SL 1.5x ATR (1.2→1.5: 노이즈 방지)
+    "leverage": 5,                   # v17.0: 5x (7→5: 손실 증폭 방지)
+    "cooldown": 8,                   # v17.0: 8봉 = 40분 (6→8: 오버트레이딩 방지)
+    "cooldown_after_sl": 6,          # v17.0: SL 후 30분 (3→6: 틸트 방지)
+    "min_score": 3.0,                # v17.0: 최고 품질만 (2.5→3.0)
+    "bb_atr_margin": 0.30,          # v17.0: BB 근접 더 엄격 (0.35→0.30)
     # 동적 레버리지
-    "max_leverage": 12,              # 12x 최대 (급등락 생존)
-    "leverage_score_threshold": 3.0,
-    "leverage_boost_per_point": 3.0,
+    "max_leverage": 8,               # v17.0: 8x 최대 (12→8)
+    "leverage_score_threshold": 3.5, # v17.0: 레버리지 부스트 기준 상향 (3.0→3.5)
+    "leverage_boost_per_point": 2.0, # v17.0: 부스트 완화 (3.0→2.0)
     # 최소 TP/SL 거리 (가격 대비 %)
-    "min_tp_pct": 0.015,             # 최소 TP 1.5%
-    "min_sl_pct": 0.010,             # 최소 SL 1.0%
+    "min_tp_pct": 0.020,             # v17.0: 최소 TP 2.0% (1.5→2.0)
+    "min_sl_pct": 0.015,             # v17.0: 최소 SL 1.5% (1.0→1.5)
     # Shared
     "tf_leverage": 10,
     "ltf_ema_fast": 9,
@@ -61,12 +62,12 @@ OPTIMAL_PARAMS = {
 }
 
 ENGINE_CONFIG = {
-    "risk_per_trade": 0.03,       # 3% (급등락 대비 축소)
-    "use_trailing_stop": False,   # 고정 TP/SL
+    "risk_per_trade": 0.015,      # v17.0: 1.5% (3→1.5: 연패 시 계좌 보존)
+    "use_trailing_stop": False,   # 고정 TP/SL (백테스트)
     "trailing_activation_atr": 1.5,
     "trailing_distance_atr": 1.0,
-    "max_daily_loss": 0.08,       # 8% (급등락 대비)
-    "time_exit_bars": 36,         # 36 × 5분 = 3시간 (빠른 손절 — 6시간→3시간)
+    "max_daily_loss": 0.05,       # v17.0: 5% (8→5)
+    "time_exit_bars": 36,         # 36 × 5분 = 3시간
 }
 
 
@@ -268,6 +269,11 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
 
         if cur_adx < adx_min:
             continue
+
+        # v17.0: ADX 2봉 연속 추세 확인 (단발성 스파이크 필터링)
+        if h_idx >= 2 and not np.isnan(h_adx[h_idx - 1]):
+            if h_adx[h_idx - 1] < adx_min:
+                continue  # 이전 봉도 ADX 기준 충족해야 진입
 
         # 1H 추세: DI + EMA 필수
         bullish = (h_pdi[h_idx] > h_mdi[h_idx] and h_ef[h_idx] > h_em[h_idx])

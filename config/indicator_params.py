@@ -1,7 +1,8 @@
 """
-Indicator & Trading Parameters v13.0 — Aggressive Frequency & Profit
-- 거래 빈도 극대화 + 수익률 최적화
-- 중간 추세 + 넓은 풀백 + 동적 레버리지 8~20x
+Indicator & Trading Parameters v17.0 — 실전 손실 분석 기반 생존 최적화
+- 승률 향상: 강한 추세 + 깊은 풀백만 진입
+- 손실 축소: 레버리지/리스크 대폭 감소
+- 수익 보호: 넓은 SL + 큰 TP (R:R 1.67:1 유지)
 """
 
 CANDLE_MASTER_PLAN = {
@@ -21,15 +22,15 @@ ICHIMOKU = {
 }
 VOLUME = {"ma_length": 20}
 
-# === Trading Config v16.0 — 실전 데이터 기반 최적화 ===
+# === Trading Config v17.0 — 실전 손실 분석 기반 생존 최적화 ===
 TRADING = {
     "exchange": "bybit",
-    "default_leverage": 7,           # v16.0: 급등락 생존 (10→7)
-    "max_leverage": 12,              # v16.0: 12x (15→12)
+    "default_leverage": 5,           # v17.0: 5x (7→5: 손실 증폭 방지)
+    "max_leverage": 8,               # v17.0: 8x (12→8: 변동성 생존)
     "default_timeframe": "5",
-    "risk_per_trade": 0.03,          # v16.0: 3% (4→3: 급등락 대비)
-    "max_open_positions": 3,         # v16.0: 3개 (5→3: 동시 손절 방지)
-    "max_daily_loss": 0.08,          # v16.0: 8% (10→8)
+    "risk_per_trade": 0.015,         # v17.0: 1.5% (3→1.5: 연패 시 계좌 보존)
+    "max_open_positions": 2,         # v17.0: 2개 (3→2: 상관 손실 최소화)
+    "max_daily_loss": 0.05,          # v17.0: 5% (8→5: 일일 손실 한도 축소)
 }
 
 DAILY_CANDLE_PROTECTION = {
@@ -50,19 +51,19 @@ ORDER_TYPE_CONFIG = {
     "limit_timeout_seconds": 120,     # v13.0: 2분 (was 3분)
 }
 
-# === Profit Optimization v15.0 ===
+# === Profit Optimization v17.0 — R:R 1.67:1 유지, SL 넓혀서 노이즈 방지 ===
 PROFIT_OPTIMIZATION = {
     "vol_tp_scale": {
-        "extreme": 2.5,
-        "high": 2.2,
-        "normal": 2.0,      # R:R 2.0:1
-        "low": 1.8,
+        "extreme": 3.0,      # v17.0: 극단 변동성에서 큰 수익 추구
+        "high": 2.7,
+        "normal": 2.5,       # v17.0: 2.0→2.5 (더 큰 TP)
+        "low": 2.0,
     },
     "vol_sl_scale": {
-        "extreme": 1.5,
-        "high": 1.2,
-        "normal": 1.0,      # R:R 2.0:1
-        "low": 0.8,
+        "extreme": 1.8,      # v17.0: 노이즈 스탑아웃 방지
+        "high": 1.6,
+        "normal": 1.5,       # v17.0: 1.0→1.5 (넓은 SL)
+        "low": 1.2,
     },
     "adx_tp_bonus": {
         "threshold_1": 30,   # was 35 — 더 자주 보너스 적용

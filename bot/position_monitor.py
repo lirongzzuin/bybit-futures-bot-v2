@@ -6,7 +6,7 @@ from utils.logger import setup_logger
 
 logger = setup_logger("position_monitor")
 
-COOLDOWN_MINUTES = 10  # v13.0: 10분 (was 45분) — 빠른 재진입
+COOLDOWN_MINUTES = 20  # v17.0: 20분 (10→20: 틸트 방지)
 
 
 class PositionMonitor:
@@ -214,8 +214,8 @@ class PositionMonitor:
             except Exception as e:
                 logger.warning(f"[{symbol}] 기본 TP 설정 실패: {e}")
 
-        # 급락 긴급 청산: -5% (v7.6: was -8% → 대형 손실 방지)
-        if unrealized_pct <= -0.05:
+        # 급락 긴급 청산: -8% (v17.0: -5%→-8%, 레버리지 5x 기준 적절)
+        if unrealized_pct <= -0.08:
             logger.warning(f"[{symbol}] 급락! 손실 {unrealized_pct:.1%} → 긴급 청산")
             self.order_mgr.execute_exit(symbol, reason=f"emergency_{unrealized_pct:.1%}")
             self._symbol_cooldown[symbol] = datetime.now(timezone.utc) + timedelta(minutes=COOLDOWN_MINUTES)
@@ -231,9 +231,9 @@ class PositionMonitor:
                     entry_time = entry_time.replace(tzinfo=timezone.utc)
                 hold_minutes = (datetime.now(timezone.utc) - entry_time).total_seconds() / 60
 
-                # v8.0: 120분+ 보유 + 손실 1%+ → 시장가 손절 (완화: 회복 기회 부여)
-                if hold_minutes >= 120 and unrealized_pct < -0.01:
-                    logger.info(f"[{symbol}] 시간 초과 ({hold_minutes:.0f}분) + 손실 {unrealized_pct:.1%} → 타임아웃 청산")
+                # v17.0: 150분+ 보유 + 손실 1.5%+ → 시장가 손절 (120→150: 회복 시간 추가)
+                if hold_minutes >= 150 and unrealized_pct < -0.015:
+                    logger.info(f"[{symbol}] 시간 초과 ({hold_minutes:.0f}분) + 손실 {unrealized_pct:.1%} → v17.0 타임아웃 청산")
                     self.order_mgr.execute_exit(symbol, reason=f"timeout_{hold_minutes:.0f}m_{unrealized_pct:.1%}")
                     self._symbol_cooldown[symbol] = datetime.now(timezone.utc) + timedelta(minutes=COOLDOWN_MINUTES)
                     return
@@ -262,10 +262,10 @@ class PositionMonitor:
             except Exception:
                 pass
 
-        # === Stage 1: 본전 보호 (수익 0.8%+) — 수수료 반영 ===
-        # v8.0: 0.8%로 하향 — 조기 본전 보호로 손실 전환 방지
+        # === Stage 1: 본전 보호 (수익 1.5%+) — 수수료 반영 ===
+        # v17.0: 1.5%로 상향 (0.8→1.5: 정상 리트레이스에 스탑아웃 방지)
         # 본전 SL = 진입가 + 왕복 수수료분 (순손실 제로 보장)
-        if unrealized_pct >= 0.008 and not pos_info.get("breakeven_set"):
+        if unrealized_pct >= 0.015 and not pos_info.get("breakeven_set"):
             fee_offset = entry * 0.00075  # 왕복 수수료 0.075%
             if side == "long":
                 be_sl = self.client.round_price(symbol, entry + fee_offset)
@@ -291,11 +291,10 @@ class PositionMonitor:
                 except Exception:
                     pass
 
-        # === Stage 2: 변동성 적응 트레일링 SL (v10.0 — 레짐별 보호 비율) ===
-        if unrealized_pct >= 0.015:
-            # v10.0: 변동성 레짐에 따라 트레일링 강도 조절
-            # 고변동성: 더 여유 있는 트레일링 (whipsaw 방지, 큰 수익 추구)
-            # 저변동성: 타이트한 트레일링 (수익 확보, 추세 약함)
+        # === Stage 2: 변동성 적응 트레일링 SL (v17.0 — 완화된 보호 비율) ===
+        # v17.0: 2.5%부터 활성화 (1.5→2.5: 수익 거래에 숨쉴 공간)
+        # 보호 비율 전체 하향: 트레일링이 수익 거래를 조기 종료하던 문제 해결
+        if unrealized_pct >= 0.025:
             vol_regime = pos_info.get("vol_regime", "normal")
             if vol_regime in ("extreme", "high"):
                 vol_offset = -0.05  # 보호 비율 5%p 감소 (여유 있게)
@@ -304,16 +303,15 @@ class PositionMonitor:
             else:
                 vol_offset = 0.0
 
+            # v17.0: 보호 비율 전체 하향 (수익 거래 조기 종료 방지)
             if unrealized_pct >= 0.10:
-                protect_ratio = min(0.85 + vol_offset, 0.90)
-            elif unrealized_pct >= 0.05:
                 protect_ratio = min(0.75 + vol_offset, 0.85)
-            elif unrealized_pct >= 0.03:
+            elif unrealized_pct >= 0.05:
                 protect_ratio = min(0.60 + vol_offset, 0.75)
-            elif unrealized_pct >= 0.02:
-                protect_ratio = min(0.50 + vol_offset, 0.65)
+            elif unrealized_pct >= 0.03:
+                protect_ratio = min(0.45 + vol_offset, 0.60)
             else:
-                protect_ratio = min(0.40 + vol_offset, 0.55)
+                protect_ratio = min(0.30 + vol_offset, 0.45)
 
             if side == "long":
                 cur_high = pos_info.get("highest_price", price)
