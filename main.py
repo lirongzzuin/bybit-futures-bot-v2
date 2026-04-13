@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """
-암호화폐 선물 자동매매 봇 — v17.0
+암호화폐 선물 자동매매 봇 — v17.1
 
-전략: Momentum Scalper v17.0 (1H 추세 + 5m 진입)
+전략: Momentum Scalper v17.1 (1H 추세 + 5m 진입)
 거래소: Bybit USDT 무기한 선물
 타임프레임: 5분봉 (1H 리샘플링으로 상위 추세 확인)
 
-v17.0 변경사항 (실전 손실 분석 기반 생존 최적화):
-  - ADX 28+ 2봉 연속 추세 확인: 강한 추세만 진입
-  - RSI 풀백 범위 축소: Long 25-35, Short 65-75
-  - min_score 3.0: 최고 품질 시그널만 진입
-  - TP 2.5x / SL 1.5x ATR: R:R 1.67:1, 넓은 SL로 노이즈 방지
-  - 레버리지 5x (max 8x): 손실 증폭 방지
-  - 리스크 1.5%/거래: 연패 시 계좌 보존
-  - 최대 동시 포지션 2개, 일일 손실 한도 5%
-  - 본전 보호 1.5%, 트레일링 2.5%부터: 수익 거래 조기 종료 방지
-  - 연속 4패부터 50% 사이즈 축소: 조기 보호
-  - Circuit breaker 복원: MDD 30% → 2시간 쿨링
+v17.1 변경사항 (v17.0 실거래 7건 분석 → 본전 SL 저주 해소):
+  - position_monitor Stage 1 본전 SL: 1.5%→2.5% (풀백 생존)
+  - position_monitor Stage 2 트레일링 활성화: 2.5%→3.5%
+  - Stage 2 보호 비율 하향: 30/45/60/75 → 25/35/50/65
+  - Stage 4 TP 확대 비활성화 (초기 TP 유지)
+  - 시간 기반 본전 타이트닝: 60분→120분
+  - ATR 수축 SL 타이트닝: 수익 5%→8% 이상만
+  - sl_atr_mult: 1.5→1.7 (노이즈 여유)
+  - min_score: 3.0→2.7 (기회 확대)
+  - max_open_positions: 2→3 (심볼 분산)
 
 실행: python main.py
 """
@@ -65,9 +64,9 @@ class TradingBot:
             self.mode_str = "메인넷"
         mode = self.mode_str
         logger.info("=" * 60)
-        logger.info(f"암호화폐 선물 자동매매 봇 v17.0")
+        logger.info(f"암호화폐 선물 자동매매 봇 v17.1")
         logger.info(f"  모드: {mode}")
-        logger.info(f"  전략: Momentum Scalper v17.0 (1H 추세 + 5m 진입)")
+        logger.info(f"  전략: Momentum Scalper v17.1 (1H 추세 + 5m 진입)")
         logger.info(f"  타임프레임: 5분봉 진입 (1H 리샘플링 추세 확인)")
         logger.info(f"  TP {OPTIMAL_PARAMS['tp_atr_mult']}x / SL {OPTIMAL_PARAMS['sl_atr_mult']}x / {OPTIMAL_PARAMS['leverage']}x lev")
         logger.info(f"  ADX >= {OPTIMAL_PARAMS['adx_min']} | RSI Long {OPTIMAL_PARAMS['rsi_pull_long_lo']}-{OPTIMAL_PARAMS['rsi_pull_long_hi']} | RSI Short {OPTIMAL_PARAMS['rsi_pull_short_lo']}-{OPTIMAL_PARAMS['rsi_pull_short_hi']}")

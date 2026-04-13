@@ -335,15 +335,15 @@ class TestOptimalParamsRegression:
     """Regression tests for OPTIMAL_PARAMS."""
 
     def test_optimal_params_unchanged(self):
-        """Verify OPTIMAL_PARAMS values match expected (regression test v17.0)."""
-        assert OPTIMAL_PARAMS["strategy_type"] == "momentum_scalper_v17.0"
+        """Verify OPTIMAL_PARAMS values match expected (regression test v17.1)."""
+        assert OPTIMAL_PARAMS["strategy_type"] == "momentum_scalper_v17.1"
         assert OPTIMAL_PARAMS["adx_min"] == 28
         assert OPTIMAL_PARAMS["rsi_pull_long_hi"] == 35
         assert OPTIMAL_PARAMS["rsi_pull_short_lo"] == 65
         assert OPTIMAL_PARAMS["tp_atr_mult"] == 2.5
-        assert OPTIMAL_PARAMS["sl_atr_mult"] == 1.5
+        assert OPTIMAL_PARAMS["sl_atr_mult"] == 1.7  # v17.1: 1.5→1.7
         assert OPTIMAL_PARAMS["leverage"] == 5
-        assert OPTIMAL_PARAMS["min_score"] == 3.0
+        assert OPTIMAL_PARAMS["min_score"] == 2.7    # v17.1: 3.0→2.7
 
 
 class TestEngineConfigRegression:

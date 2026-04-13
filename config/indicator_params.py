@@ -1,8 +1,13 @@
 """
-Indicator & Trading Parameters v17.0 — 실전 손실 분석 기반 생존 최적화
-- 승률 향상: 강한 추세 + 깊은 풀백만 진입
-- 손실 축소: 레버리지/리스크 대폭 감소
-- 수익 보호: 넓은 SL + 큰 TP (R:R 1.67:1 유지)
+Indicator & Trading Parameters v17.1 — 본전 SL 저주 해소 + 승리 규모 확대
+- v17.0 실거래(7건, 승률 71%, 총 -0.61 USDT) 분석에서 드러난 문제:
+  * 의도된 R:R 1.67:1 vs 실거래 0.27:1
+  * Stage 1 본전 SL(+1.5%)이 정상 풀백에 조기 스탑아웃 → 승리 규모 작아짐
+  * Stage 2 트레일링 타이트 → 추세 초기 잘라냄
+- v17.1 핵심 변경:
+  * SL ATR 1.5→1.7 (노이즈 여유 추가)
+  * min_score 3.0→2.7 (기회 확보)
+  * max_open_positions 2→3 (심볼 분산)
 """
 
 CANDLE_MASTER_PLAN = {
@@ -22,15 +27,15 @@ ICHIMOKU = {
 }
 VOLUME = {"ma_length": 20}
 
-# === Trading Config v17.0 — 실전 손실 분석 기반 생존 최적화 ===
+# === Trading Config v17.1 — 본전 SL 저주 해소 ===
 TRADING = {
     "exchange": "bybit",
-    "default_leverage": 5,           # v17.0: 5x (7→5: 손실 증폭 방지)
-    "max_leverage": 8,               # v17.0: 8x (12→8: 변동성 생존)
+    "default_leverage": 5,           # v17.0 유지: 5x
+    "max_leverage": 8,               # v17.0 유지: 8x
     "default_timeframe": "5",
-    "risk_per_trade": 0.015,         # v17.0: 1.5% (3→1.5: 연패 시 계좌 보존)
-    "max_open_positions": 2,         # v17.0: 2개 (3→2: 상관 손실 최소화)
-    "max_daily_loss": 0.05,          # v17.0: 5% (8→5: 일일 손실 한도 축소)
+    "risk_per_trade": 0.015,         # v17.0 유지: 1.5%
+    "max_open_positions": 3,         # v17.1: 2→3 (심볼 분산, 기회 확대)
+    "max_daily_loss": 0.05,          # v17.0 유지: 5%
 }
 
 DAILY_CANDLE_PROTECTION = {
@@ -51,19 +56,19 @@ ORDER_TYPE_CONFIG = {
     "limit_timeout_seconds": 120,     # v13.0: 2분 (was 3분)
 }
 
-# === Profit Optimization v17.0 — R:R 1.67:1 유지, SL 넓혀서 노이즈 방지 ===
+# === Profit Optimization v17.1 — SL 추가 확대, 노이즈 스탑아웃 완전 차단 ===
 PROFIT_OPTIMIZATION = {
     "vol_tp_scale": {
-        "extreme": 3.0,      # v17.0: 극단 변동성에서 큰 수익 추구
+        "extreme": 3.0,
         "high": 2.7,
-        "normal": 2.5,       # v17.0: 2.0→2.5 (더 큰 TP)
+        "normal": 2.5,
         "low": 2.0,
     },
     "vol_sl_scale": {
-        "extreme": 1.8,      # v17.0: 노이즈 스탑아웃 방지
-        "high": 1.6,
-        "normal": 1.5,       # v17.0: 1.0→1.5 (넓은 SL)
-        "low": 1.2,
+        "extreme": 2.0,      # v17.1: 1.8→2.0
+        "high": 1.8,         # v17.1: 1.6→1.8
+        "normal": 1.7,       # v17.1: 1.5→1.7 (노이즈 여유 확대)
+        "low": 1.4,          # v17.1: 1.2→1.4
     },
     "adx_tp_bonus": {
         "threshold_1": 30,   # was 35 — 더 자주 보너스 적용

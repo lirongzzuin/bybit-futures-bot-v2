@@ -86,13 +86,13 @@ class TestCanOpenPosition:
         assert can_open is True
 
     def test_can_open_position_max_reached(self):
-        """Should reject when max positions reached (v17.0: max=2)."""
+        """Should reject when max positions reached (v17.1: max=3)."""
         rm = RiskManager()
         rm.state.open_positions = {
-            "BTCUSDT": {}, "ETHUSDT": {},
+            "BTCUSDT": {}, "ETHUSDT": {}, "SOLUSDT": {},
         }
 
-        # Default max is 2 (v17.0)
+        # v17.1: default max is 3
         can_open, reason = rm.can_open_position("DOGEUSDT", simulated_time=self.SAFE_TIME)
 
         assert can_open is False

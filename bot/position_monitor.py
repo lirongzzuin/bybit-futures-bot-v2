@@ -6,7 +6,8 @@ from utils.logger import setup_logger
 
 logger = setup_logger("position_monitor")
 
-COOLDOWN_MINUTES = 20  # v17.0: 20분 (10→20: 틸트 방지)
+COOLDOWN_MINUTES = 20  # v17.0 유지: 20분 (틸트 방지)
+# v17.1: Stage 1/2 완화 — v17.0 실거래에서 본전 SL 저주 확인 후 조정
 
 
 class PositionMonitor:
@@ -152,8 +153,9 @@ class PositionMonitor:
                 except Exception:
                     pass
 
-            # D) ATR 수축 감지: 변동성 급감 = 추세 종료 신호 → SL 타이트닝 (수익 5%+ 이상만)
-            if unrealized_pct > 0.05 and atr > 0:
+            # D) ATR 수축 감지: 변동성 급감 = 추세 종료 신호 → SL 타이트닝 (수익 8%+ 이상만)
+            # v17.1: 5%→8% (중간 수익 구간의 풀백을 수축으로 오인해 잘라내던 문제 해소)
+            if unrealized_pct > 0.08 and atr > 0:
                 try:
                     df_atr = self.fetch_data_fn(symbol, limit=50)
                     if not df_atr.empty and len(df_atr) >= 30:
@@ -221,8 +223,7 @@ class PositionMonitor:
             self._symbol_cooldown[symbol] = datetime.now(timezone.utc) + timedelta(minutes=COOLDOWN_MINUTES)
             return
 
-        # v7.6: 시간 기반 SL 타이트닝 — 데이터: 1-2시간 체류 = WR 36%
-        # 60분 이상 보유 + 수익 없음 → SL 타이트닝으로 손실 축소
+        # v17.1: 시간 기반 SL 타이트닝 — 120분+/수익 0.5% 미만만 (60→120: 추세 초기 여유)
         entry_time_str = pos_info.get("entry_time", "")
         if entry_time_str:
             try:
@@ -231,15 +232,16 @@ class PositionMonitor:
                     entry_time = entry_time.replace(tzinfo=timezone.utc)
                 hold_minutes = (datetime.now(timezone.utc) - entry_time).total_seconds() / 60
 
-                # v17.0: 150분+ 보유 + 손실 1.5%+ → 시장가 손절 (120→150: 회복 시간 추가)
+                # v17.0 유지: 150분+ + 손실 1.5%+ → 시장가 손절
                 if hold_minutes >= 150 and unrealized_pct < -0.015:
-                    logger.info(f"[{symbol}] 시간 초과 ({hold_minutes:.0f}분) + 손실 {unrealized_pct:.1%} → v17.0 타임아웃 청산")
+                    logger.info(f"[{symbol}] 시간 초과 ({hold_minutes:.0f}분) + 손실 {unrealized_pct:.1%} → 타임아웃 청산")
                     self.order_mgr.execute_exit(symbol, reason=f"timeout_{hold_minutes:.0f}m_{unrealized_pct:.1%}")
                     self._symbol_cooldown[symbol] = datetime.now(timezone.utc) + timedelta(minutes=COOLDOWN_MINUTES)
                     return
 
-                # 60분+ 보유 + 본전 근처 → SL을 본전+수수료로 타이트닝
-                if hold_minutes >= 60 and unrealized_pct > 0 and unrealized_pct < 0.01:
+                # v17.1: 120분+ 보유 + 수익 0.5% 미만 → SL을 본전+수수료로 타이트닝
+                # (v17.0: 60분에서 본전 강제 → 추세 초기 잘라냄 문제 해소)
+                if hold_minutes >= 120 and 0 <= unrealized_pct < 0.005:
                     fee_offset = entry * 0.00075
                     if side == "long":
                         time_sl = self.client.round_price(symbol, entry + fee_offset)
@@ -262,10 +264,10 @@ class PositionMonitor:
             except Exception:
                 pass
 
-        # === Stage 1: 본전 보호 (수익 1.5%+) — 수수료 반영 ===
-        # v17.0: 1.5%로 상향 (0.8→1.5: 정상 리트레이스에 스탑아웃 방지)
+        # === Stage 1: 본전 보호 (수익 2.5%+) — v17.1 본전 SL 저주 해소 ===
+        # v17.0: 1.5% → v17.1: 2.5% (풀백에 조기 탈출 방지, 승리 규모 확대)
         # 본전 SL = 진입가 + 왕복 수수료분 (순손실 제로 보장)
-        if unrealized_pct >= 0.015 and not pos_info.get("breakeven_set"):
+        if unrealized_pct >= 0.025 and not pos_info.get("breakeven_set"):
             fee_offset = entry * 0.00075  # 왕복 수수료 0.075%
             if side == "long":
                 be_sl = self.client.round_price(symbol, entry + fee_offset)
@@ -291,27 +293,27 @@ class PositionMonitor:
                 except Exception:
                     pass
 
-        # === Stage 2: 변동성 적응 트레일링 SL (v17.0 — 완화된 보호 비율) ===
-        # v17.0: 2.5%부터 활성화 (1.5→2.5: 수익 거래에 숨쉴 공간)
-        # 보호 비율 전체 하향: 트레일링이 수익 거래를 조기 종료하던 문제 해결
-        if unrealized_pct >= 0.025:
+        # === Stage 2: 변동성 적응 트레일링 SL (v17.1 — 대폭 완화) ===
+        # v17.1: 3.5%부터 활성화 (2.5→3.5), 보호 비율 전체 5~10%p 하향
+        # v17.0 실거래 분석: 2.5%부터의 타이트 트레일링이 추세 초기를 잘라냄
+        if unrealized_pct >= 0.035:
             vol_regime = pos_info.get("vol_regime", "normal")
             if vol_regime in ("extreme", "high"):
-                vol_offset = -0.05  # 보호 비율 5%p 감소 (여유 있게)
+                vol_offset = -0.05
             elif vol_regime == "low":
-                vol_offset = 0.05   # 보호 비율 5%p 증가 (타이트)
+                vol_offset = 0.05
             else:
                 vol_offset = 0.0
 
-            # v17.0: 보호 비율 전체 하향 (수익 거래 조기 종료 방지)
+            # v17.1: 보호 비율 하향 — 30/45/60/75 → 25/35/50/65
             if unrealized_pct >= 0.10:
-                protect_ratio = min(0.75 + vol_offset, 0.85)
-            elif unrealized_pct >= 0.05:
-                protect_ratio = min(0.60 + vol_offset, 0.75)
-            elif unrealized_pct >= 0.03:
-                protect_ratio = min(0.45 + vol_offset, 0.60)
+                protect_ratio = min(0.65 + vol_offset, 0.75)
+            elif unrealized_pct >= 0.06:
+                protect_ratio = min(0.50 + vol_offset, 0.65)
+            elif unrealized_pct >= 0.045:
+                protect_ratio = min(0.35 + vol_offset, 0.50)
             else:
-                protect_ratio = min(0.30 + vol_offset, 0.45)
+                protect_ratio = min(0.25 + vol_offset, 0.35)
 
             if side == "long":
                 cur_high = pos_info.get("highest_price", price)
@@ -349,29 +351,10 @@ class PositionMonitor:
             )
             pos_info["partial_1_done"] = True
 
-        # === Stage 4: TP 무한 확대 (TP 80% 도달할 때마다) ===
-        if tp_progress >= 0.8 and tp > 0:
-            extend_count = pos_info.get("tp_extend_count", 0)
-            last_extend_progress = pos_info.get("last_extend_progress", 0)
-
-            # 마지막 확대 이후 또 80% 이상 도달했으면 재확대
-            if tp_progress >= last_extend_progress + 0.8 or extend_count == 0:
-                if side == "long":
-                    new_tp = tp + original_tp_dist * 0.5
-                else:
-                    new_tp = tp - original_tp_dist * 0.5
-                new_tp = self.client.round_price(symbol, new_tp)
-                try:
-                    self.client.set_tp_sl(symbol, take_profit=new_tp, position_idx=pos_idx)
-                    old_tp = tp
-                    pos_info["tp"] = new_tp
-                    pos_info["tp_extend_count"] = extend_count + 1
-                    pos_info["last_extend_progress"] = tp_progress
-                    logger.info(f"[{symbol}] TP 확대 #{extend_count+1}: "
-                                f"{old_tp:.6f} → {new_tp:.6f} "
-                                f"(진행 {tp_progress:.0%}, 수익 {unrealized_pct:.1%})")
-                except Exception as e:
-                    logger.warning(f"[{symbol}] TP 확대 실패: {e}")
+        # === Stage 4: TP 확대 — v17.1에서 비활성화 ===
+        # v17.0 실거래 분석: TP 근처 도달 자체가 드물고, 확대 후 트레일링에 걸림
+        # → 초기 TP(ATR 2.5x)를 그대로 유지하는 게 유리
+        pass
 
         # === Stage 5: 2차 부분 익절 (원래 TP의 200% 도달, 추가 30% 청산) ===
         if tp_progress >= 2.0 and not pos_info.get("partial_2_done"):

@@ -1,17 +1,16 @@
 """
-Momentum Scalper v17.0 — 실전 손실 분석 기반 최적화
+Momentum Scalper v17.1 — v17.0 본전 SL 저주 해소
 
-v17.0 핵심 변경 (실전 데이터 분석 결과):
-  문제: 초반 익절 후 연패로 손실 — 승률 35%, 평균 손실 > 평균 수익
-  원인: 트레일링 SL 너무 타이트, 레버리지 과다, 약한 추세 진입
+v17.1 핵심 변경 (v17.0 실거래 분석):
+  v17.0 결과: 승률 71%, 총 -0.61 USDT — R:R 0.27:1 (의도 1.67:1 대비 1/6)
+  진짜 원인: position_monitor Stage 1 본전 SL(+1.5%)이 풀백에 조기 탈출
 
-  해결:
-  1. ADX 28+ 강한 추세만 진입 (25→28)
-  2. RSI 풀백 범위 축소: 깊은 풀백만 (Long 25-35, Short 65-75)
-  3. min_score 3.0: 최고 품질 시그널만
-  4. TP 2.5x / SL 1.5x ATR: R:R 1.67:1 유지, SL 넓혀서 노이즈 방지
-  5. 레버리지 5x 기본, 8x 최대: 손실 증폭 방지
-  6. 리스크 1.5%/거래: 연패 시 계좌 보존
+  이 파일에서의 변경:
+  1. min_score 3.0→2.7 (기회 확대 — v17.0 진입 빈도 너무 낮음)
+  2. sl_atr_mult 1.5→1.7 (노이즈 여유 추가)
+  3. ADX 2봉 연속 / RSI 범위 / TP 2.5x 유지 (진입 품질은 원인 아님)
+
+  실제 핵심 수정은 bot/position_monitor.py Stage 1/2 완화에 있음.
 """
 import numpy as np
 import pandas as pd
@@ -19,33 +18,32 @@ from typing import Optional
 
 
 OPTIMAL_PARAMS = {
-    "strategy_type": "momentum_scalper_v17.0",
+    "strategy_type": "momentum_scalper_v17.1",
     # 1H indicators (HTF)
     "htf_ema_fast": 9,
     "htf_ema_mid": 21,
     "htf_rsi_period": 14,
     "htf_adx_period": 14,
     # Entry params (5m)
-    # v17.0 — 실전 손실 분석 기반 최적화
-    "adx_min": 28,                   # v17.0: 강한 추세만 (25→28)
+    "adx_min": 28,                   # v17.0 유지
     "rsi_pull_long_lo": 25,
-    "rsi_pull_long_hi": 35,          # v17.0: 깊은 풀백만 (40→35)
-    "rsi_pull_short_lo": 65,         # v17.0: 깊은 바운스만 (60→65)
+    "rsi_pull_long_hi": 35,
+    "rsi_pull_short_lo": 65,
     "rsi_pull_short_hi": 75,
-    "tp_atr_mult": 2.5,             # v17.0: TP 2.5x ATR (2.0→2.5: 큰 수익)
-    "sl_atr_mult": 1.5,             # v17.0: SL 1.5x ATR (1.2→1.5: 노이즈 방지)
-    "leverage": 5,                   # v17.0: 5x (7→5: 손실 증폭 방지)
-    "cooldown": 8,                   # v17.0: 8봉 = 40분 (6→8: 오버트레이딩 방지)
-    "cooldown_after_sl": 6,          # v17.0: SL 후 30분 (3→6: 틸트 방지)
-    "min_score": 3.0,                # v17.0: 최고 품질만 (2.5→3.0)
-    "bb_atr_margin": 0.30,          # v17.0: BB 근접 더 엄격 (0.35→0.30)
+    "tp_atr_mult": 2.5,             # v17.0 유지
+    "sl_atr_mult": 1.7,             # v17.1: 1.5→1.7 (노이즈 여유 확대)
+    "leverage": 5,                   # v17.0 유지
+    "cooldown": 8,
+    "cooldown_after_sl": 6,
+    "min_score": 2.7,                # v17.1: 3.0→2.7 (기회 확대)
+    "bb_atr_margin": 0.30,
     # 동적 레버리지
-    "max_leverage": 8,               # v17.0: 8x 최대 (12→8)
-    "leverage_score_threshold": 3.5, # v17.0: 레버리지 부스트 기준 상향 (3.0→3.5)
-    "leverage_boost_per_point": 2.0, # v17.0: 부스트 완화 (3.0→2.0)
+    "max_leverage": 8,
+    "leverage_score_threshold": 3.5,
+    "leverage_boost_per_point": 2.0,
     # 최소 TP/SL 거리 (가격 대비 %)
-    "min_tp_pct": 0.020,             # v17.0: 최소 TP 2.0% (1.5→2.0)
-    "min_sl_pct": 0.015,             # v17.0: 최소 SL 1.5% (1.0→1.5)
+    "min_tp_pct": 0.020,
+    "min_sl_pct": 0.017,             # v17.1: 1.5→1.7% (SL ATR 1.7에 맞춤)
     # Shared
     "tf_leverage": 10,
     "ltf_ema_fast": 9,
@@ -62,11 +60,11 @@ OPTIMAL_PARAMS = {
 }
 
 ENGINE_CONFIG = {
-    "risk_per_trade": 0.015,      # v17.0: 1.5% (3→1.5: 연패 시 계좌 보존)
-    "use_trailing_stop": False,   # 고정 TP/SL (백테스트)
+    "risk_per_trade": 0.015,
+    "use_trailing_stop": False,
     "trailing_activation_atr": 1.5,
     "trailing_distance_atr": 1.0,
-    "max_daily_loss": 0.05,       # v17.0: 5% (8→5)
+    "max_daily_loss": 0.05,
     "time_exit_bars": 36,         # 36 × 5분 = 3시간
 }
 
