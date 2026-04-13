@@ -1,16 +1,18 @@
 """
-Momentum Scalper v17.1 — v17.0 본전 SL 저주 해소
+Momentum Scalper v17.2 — 진입 조건 정상화 (v17.1 배포 후 거래 0건 대응)
 
-v17.1 핵심 변경 (v17.0 실거래 분석):
-  v17.0 결과: 승률 71%, 총 -0.61 USDT — R:R 0.27:1 (의도 1.67:1 대비 1/6)
-  진짜 원인: position_monitor Stage 1 본전 SL(+1.5%)이 풀백에 조기 탈출
+v17.1 배포 후 2.5시간 동안 30심볼 × 30회 분석에도 시그널 0건 확인:
+  원인: ADX 28 + ADX 2봉 연속 + RSI 25-35/65-75 + BB 근접 필수 + min_score 2.7
+         모두 AND로 묶여서 현실에서 거의 만족 불가
 
-  이 파일에서의 변경:
-  1. min_score 3.0→2.7 (기회 확대 — v17.0 진입 빈도 너무 낮음)
-  2. sl_atr_mult 1.5→1.7 (노이즈 여유 추가)
-  3. ADX 2봉 연속 / RSI 범위 / TP 2.5x 유지 (진입 품질은 원인 아님)
-
-  실제 핵심 수정은 bot/position_monitor.py Stage 1/2 완화에 있음.
+v17.2 변경:
+  1. adx_min: 28 → 25
+  2. ADX 2봉 연속 조건 제거 (현재 봉만 확인)
+  3. RSI 풀백 범위 확대: Long 25-35→28-42, Short 65-75→58-72
+  4. BB 밴드 근접: 필수 → 선택 (스코어 기여만 +0.5)
+  5. min_score: 2.7 → 2.3
+  6. sl_atr_mult 1.7 / TP 2.5 유지
+  7. Stage 1/2 본전 SL 저주 해소 로직은 v17.1 그대로 유지 (position_monitor.py)
 """
 import numpy as np
 import pandas as pd
@@ -18,25 +20,25 @@ from typing import Optional
 
 
 OPTIMAL_PARAMS = {
-    "strategy_type": "momentum_scalper_v17.1",
+    "strategy_type": "momentum_scalper_v17.2",
     # 1H indicators (HTF)
     "htf_ema_fast": 9,
     "htf_ema_mid": 21,
     "htf_rsi_period": 14,
     "htf_adx_period": 14,
     # Entry params (5m)
-    "adx_min": 28,                   # v17.0 유지
-    "rsi_pull_long_lo": 25,
-    "rsi_pull_long_hi": 35,
-    "rsi_pull_short_lo": 65,
-    "rsi_pull_short_hi": 75,
-    "tp_atr_mult": 2.5,             # v17.0 유지
-    "sl_atr_mult": 1.7,             # v17.1: 1.5→1.7 (노이즈 여유 확대)
-    "leverage": 5,                   # v17.0 유지
-    "cooldown": 8,
+    "adx_min": 25,                   # v17.2: 28→25 (거래 0건 해소)
+    "rsi_pull_long_lo": 30,          # v17.2: 25→30
+    "rsi_pull_long_hi": 48,          # v17.2: 35→48 (현실 RSI 46-54 구간 커버)
+    "rsi_pull_short_lo": 52,         # v17.2: 65→52
+    "rsi_pull_short_hi": 70,         # v17.2: 75→70
+    "tp_atr_mult": 2.5,
+    "sl_atr_mult": 1.7,              # v17.1 유지
+    "leverage": 5,
+    "cooldown": 6,                   # v17.2: 8→6 (30분, 빈도 확보)
     "cooldown_after_sl": 6,
-    "min_score": 2.7,                # v17.1: 3.0→2.7 (기회 확대)
-    "bb_atr_margin": 0.30,
+    "min_score": 2.3,                # v17.2: 2.7→2.3
+    "bb_atr_margin": 0.50,           # v17.2: 0.30→0.50 (BB 근접 기준 완화)
     # 동적 레버리지
     "max_leverage": 8,
     "leverage_score_threshold": 3.5,
@@ -268,10 +270,8 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
         if cur_adx < adx_min:
             continue
 
-        # v17.0: ADX 2봉 연속 추세 확인 (단발성 스파이크 필터링)
-        if h_idx >= 2 and not np.isnan(h_adx[h_idx - 1]):
-            if h_adx[h_idx - 1] < adx_min:
-                continue  # 이전 봉도 ADX 기준 충족해야 진입
+        # v17.2: ADX 2봉 연속 조건 제거 (v17.1에서 거래 0건 원인)
+        # 현재 봉이 adx_min 이상이면 진입 허용, ADX 상승세 여부는 스코어로 반영
 
         # 1H 추세: DI + EMA 필수
         bullish = (h_pdi[h_idx] > h_mdi[h_idx] and h_ef[h_idx] > h_em[h_idx])
@@ -286,9 +286,9 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
         if bullish and rsi_long_lo <= l_rsi[i] <= rsi_long_hi:
             score += 1.5
 
-            # BB 하단 근접 필수
-            if c[i] > l_bbl[i] + l_atr[i] * bb_margin:
-                continue
+            # v17.2: BB 하단 근접 — 필수 → 선택 (스코어 +0.5)
+            if c[i] <= l_bbl[i] + l_atr[i] * bb_margin:
+                score += 0.5
 
             if c[i] <= l_em[i] + l_atr[i] * 0.3:
                 score += 0.8
@@ -313,8 +313,9 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
         elif bearish and rsi_short_lo <= l_rsi[i] <= rsi_short_hi:
             score += 1.5
 
-            if c[i] < l_bbu[i] - l_atr[i] * bb_margin:
-                continue
+            # v17.2: BB 상단 근접 — 필수 → 선택 (스코어 +0.5)
+            if c[i] >= l_bbu[i] - l_atr[i] * bb_margin:
+                score += 0.5
 
             if c[i] >= l_em[i] - l_atr[i] * 0.3:
                 score += 0.8

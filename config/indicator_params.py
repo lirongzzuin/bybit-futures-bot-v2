@@ -1,13 +1,13 @@
 """
-Indicator & Trading Parameters v17.1 — 본전 SL 저주 해소 + 승리 규모 확대
-- v17.0 실거래(7건, 승률 71%, 총 -0.61 USDT) 분석에서 드러난 문제:
-  * 의도된 R:R 1.67:1 vs 실거래 0.27:1
-  * Stage 1 본전 SL(+1.5%)이 정상 풀백에 조기 스탑아웃 → 승리 규모 작아짐
-  * Stage 2 트레일링 타이트 → 추세 초기 잘라냄
-- v17.1 핵심 변경:
-  * SL ATR 1.5→1.7 (노이즈 여유 추가)
-  * min_score 3.0→2.7 (기회 확보)
-  * max_open_positions 2→3 (심볼 분산)
+Indicator & Trading Parameters v17.2 — 진입 조건 정상화 + 실시간성 강화
+- v17.1 배포 후 2.5시간 거래 0건 → ADX/RSI/BB AND 조건 과도 제한 확인
+- v17.2 핵심 변경:
+  * adx_min 28→25, ADX 2봉 연속 조건 제거
+  * RSI Long 25-35→28-42, Short 65-75→58-72
+  * BB 근접: 필수 → 선택 (스코어 +0.5)
+  * min_score 2.7→2.3
+  * 분석 주기 5분→90초, 포지션 모니터 2초→1초 (fly.io shared-cpu 한계 내)
+  * v17.1의 Stage 1 본전 SL 저주 해소 로직은 유지
 """
 
 CANDLE_MASTER_PLAN = {

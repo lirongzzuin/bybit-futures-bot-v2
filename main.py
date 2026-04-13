@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 """
-암호화폐 선물 자동매매 봇 — v17.1
+암호화폐 선물 자동매매 봇 — v17.2
 
-전략: Momentum Scalper v17.1 (1H 추세 + 5m 진입)
+전략: Momentum Scalper v17.2 (1H 추세 + 5m 진입)
 거래소: Bybit USDT 무기한 선물
 타임프레임: 5분봉 (1H 리샘플링으로 상위 추세 확인)
 
-v17.1 변경사항 (v17.0 실거래 7건 분석 → 본전 SL 저주 해소):
-  - position_monitor Stage 1 본전 SL: 1.5%→2.5% (풀백 생존)
-  - position_monitor Stage 2 트레일링 활성화: 2.5%→3.5%
-  - Stage 2 보호 비율 하향: 30/45/60/75 → 25/35/50/65
-  - Stage 4 TP 확대 비활성화 (초기 TP 유지)
-  - 시간 기반 본전 타이트닝: 60분→120분
-  - ATR 수축 SL 타이트닝: 수익 5%→8% 이상만
-  - sl_atr_mult: 1.5→1.7 (노이즈 여유)
-  - min_score: 3.0→2.7 (기회 확대)
-  - max_open_positions: 2→3 (심볼 분산)
+v17.2 변경사항 (v17.1 배포 후 거래 0건 대응):
+  [진입 조건 정상화]
+  - adx_min: 28 → 25, ADX 2봉 연속 조건 제거
+  - RSI Long 25-35 → 28-42, Short 65-75 → 58-72
+  - BB 근접: 필수 → 선택 (스코어 +0.5)
+  - min_score: 2.7 → 2.3
+  - bb_atr_margin: 0.30 → 0.50
+  - cooldown: 40분 → 30분
+  [실시간성 강화]
+  - 분석 주기: 5분 → 90초 (fly.io shared-cpu 한계 내 최대치, 40 cycles/h)
+  - 포지션 모니터: 2초 → 1초
+  [v17.1 유지]
+  - Stage 1 본전 SL: 2.5% / Stage 2 트레일링: 3.5% / 보호 비율 25/35/50/65
+  - Stage 4 TP 확대 비활성화 / max_open_positions 3
 
 실행: python main.py
 """
@@ -64,9 +68,9 @@ class TradingBot:
             self.mode_str = "메인넷"
         mode = self.mode_str
         logger.info("=" * 60)
-        logger.info(f"암호화폐 선물 자동매매 봇 v17.1")
+        logger.info(f"암호화폐 선물 자동매매 봇 v17.2")
         logger.info(f"  모드: {mode}")
-        logger.info(f"  전략: Momentum Scalper v17.1 (1H 추세 + 5m 진입)")
+        logger.info(f"  전략: Momentum Scalper v17.2 (1H 추세 + 5m 진입)")
         logger.info(f"  타임프레임: 5분봉 진입 (1H 리샘플링 추세 확인)")
         logger.info(f"  TP {OPTIMAL_PARAMS['tp_atr_mult']}x / SL {OPTIMAL_PARAMS['sl_atr_mult']}x / {OPTIMAL_PARAMS['leverage']}x lev")
         logger.info(f"  ADX >= {OPTIMAL_PARAMS['adx_min']} | RSI Long {OPTIMAL_PARAMS['rsi_pull_long_lo']}-{OPTIMAL_PARAMS['rsi_pull_long_hi']} | RSI Short {OPTIMAL_PARAMS['rsi_pull_short_lo']}-{OPTIMAL_PARAMS['rsi_pull_short_hi']}")
@@ -558,10 +562,10 @@ class TradingBot:
 
 
     def on_candle_close(self):
-        """5분봉 캔들 완성 시 실행"""
+        """시그널 분석 틱 (v17.2: 90초 주기)"""
         now = datetime.now(timezone.utc)
         logger.info(f"\n{'='*50}")
-        logger.info(f"5min 캔들 완성 -- {now.strftime('%Y-%m-%d %H:%M')} UTC")
+        logger.info(f"분석 틱 -- {now.strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
         self.risk.reset_daily()
 
@@ -779,21 +783,22 @@ class TradingBot:
 
         pos_list = list(self.risk.state.open_positions.keys())
         notify("봇 시작", (
-            f"Pullback-in-Trend v15.0 | {self.mode_str}\n"
+            f"Momentum Scalper v17.2 | {self.mode_str}\n"
             f"타임프레임: 5분봉 (1H 크로스검증)\n"
             f"모니터링: 거래량 상위 {len(self.strategy_symbols)}개 심볼\n"
+            f"분석 주기: 90초 / 포지션 모니터: 1초\n"
             f"시장가 기준: 강도 >= {ORDER_TYPE_CONFIG['strong_signal_threshold']}\n"
             f"수수료: Maker 0.02% / Taker 0.055%\n"
             f"기존 포지션 동기화: {len(pos_list)}개 {pos_list}"
         ))
 
-        # v15.0: 5분마다 시그널 분석 (실시간성 대폭 향상, was 15분)
-        for minute in ["01", "06", "11", "16", "21", "26", "31", "36", "41", "46", "51", "56"]:
-            schedule.every().hour.at(f":{minute}").do(self.on_candle_close)
+        # v17.2: 90초마다 시그널 분석 (shared-cpu 한계 내 최대 실시간성)
+        # 이전: 5분마다 (12 cycles/h) → v17.2: 90초 (40 cycles/h)
+        # CPU: 10초/cycle × 40 = 400s/h = 11.1% (baseline 12.5% 이내)
+        schedule.every(90).seconds.do(self.on_candle_close)
 
-        # v15.0: 10초 모니터링 (was 30초)
-        # v15.0: 2초 모니터링 (rate limit 15%만 사용, 충분히 안전)
-        schedule.every(2).seconds.do(self.monitor)
+        # v17.2: 포지션 모니터 1초 (was 2초) — 메인루프 동일 주기
+        schedule.every(1).seconds.do(self.monitor)
 
         # 정기 브리핑: KST 09:00 / 15:00 / 21:00 / 03:00 -> UTC 00:00 / 06:00 / 12:00 / 18:00
         for hour in ["00:00", "06:00", "12:00", "18:00"]:
