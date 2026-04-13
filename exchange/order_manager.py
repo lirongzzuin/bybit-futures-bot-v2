@@ -219,16 +219,37 @@ class OrderManager:
 
         qty = self.client.round_qty(symbol, qty)
 
-        # 최소 수량/최소 주문 금액 검증
+        # 최소 수량/최소 주문 금액 검증 (v17.2: 소액 계좌 자동 보정)
         try:
             info = self.client.get_instrument_info(symbol)
-            if qty < info["min_qty"]:
-                logger.warning(f"[{symbol}] 수량 {qty} < 최소 {info['min_qty']} — 진입 불가")
-                return None
+            min_qty = info["min_qty"]
+            min_notional = info["min_notional"]
+
+            # 1. 최소 수량 미달 → 최소 수량으로 올림
+            if qty < min_qty:
+                qty = min_qty
+
+            # 2. 최소 주문 금액 미달 → 필요 수량으로 올림 (마진은 가용잔고의 50% 이내)
             notional = qty * entry_price
-            if notional < info["min_notional"]:
-                logger.warning(f"[{symbol}] 주문금액 {notional:.2f} < 최소 {info['min_notional']} USDT — 진입 불가")
-                return None
+            if notional < min_notional:
+                required_qty = min_notional / entry_price
+                required_qty = self.client.round_qty(symbol, required_qty * 1.02)  # 2% 여유
+                required_notional = required_qty * entry_price
+                required_margin = required_notional / lev
+
+                max_margin_allowed = available * 0.50  # 가용잔고 50% 한도
+                if required_margin > max_margin_allowed:
+                    logger.warning(
+                        f"[{symbol}] 최소 주문 금액({min_notional}) 보정에 필요한 마진"
+                        f"({required_margin:.2f}) > 가용잔고 50%({max_margin_allowed:.2f}) — 진입 불가"
+                    )
+                    return None
+
+                logger.info(
+                    f"[{symbol}] 주문 금액 보정: {notional:.2f} → {required_notional:.2f} USDT "
+                    f"(qty {qty} → {required_qty}, 마진 {required_margin:.2f})"
+                )
+                qty = required_qty
         except Exception as e:
             logger.warning(f"[{symbol}] 거래 규격 확인 실패 (계속 진행): {e}")
 
