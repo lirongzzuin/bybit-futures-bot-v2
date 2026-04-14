@@ -239,9 +239,10 @@ class PositionMonitor:
                     self._symbol_cooldown[symbol] = datetime.now(timezone.utc) + timedelta(minutes=COOLDOWN_MINUTES)
                     return
 
-                # v17.1: 120분+ 보유 + 수익 0.5% 미만 → SL을 본전+수수료로 타이트닝
-                # (v17.0: 60분에서 본전 강제 → 추세 초기 잘라냄 문제 해소)
-                if hold_minutes >= 120 and 0 <= unrealized_pct < 0.005:
+                # v17.3: 120→160분, 0.5%→0.3% 미만으로 완화
+                # 실거래 분석: 120~160분 구간에서 13/35 거래가 작은 이익으로 조기 탈출됨
+                # → 이 구간에 TP 도달 여유 확보 (승률 소폭 양보하되 R:R 회복)
+                if hold_minutes >= 160 and 0 <= unrealized_pct < 0.003:
                     fee_offset = entry * 0.00075
                     if side == "long":
                         time_sl = self.client.round_price(symbol, entry + fee_offset)
@@ -293,10 +294,10 @@ class PositionMonitor:
                 except Exception:
                     pass
 
-        # === Stage 2: 변동성 적응 트레일링 SL (v17.1 — 대폭 완화) ===
-        # v17.1: 3.5%부터 활성화 (2.5→3.5), 보호 비율 전체 5~10%p 하향
-        # v17.0 실거래 분석: 2.5%부터의 타이트 트레일링이 추세 초기를 잘라냄
-        if unrealized_pct >= 0.035:
+        # === Stage 2: 변동성 적응 트레일링 SL (v17.3 — 더 느슨한 활성화) ===
+        # v17.3: 3.5%→4.5% 활성화 (추세 초기 여유 확대)
+        # 첫 밴드 보호 비율 25%→20%, 나머지 대역 소폭 하향
+        if unrealized_pct >= 0.045:
             vol_regime = pos_info.get("vol_regime", "normal")
             if vol_regime in ("extreme", "high"):
                 vol_offset = -0.05
@@ -305,15 +306,15 @@ class PositionMonitor:
             else:
                 vol_offset = 0.0
 
-            # v17.1: 보호 비율 하향 — 30/45/60/75 → 25/35/50/65
+            # v17.3: 대역 재구성 — 20/30/45/60
             if unrealized_pct >= 0.10:
-                protect_ratio = min(0.65 + vol_offset, 0.75)
-            elif unrealized_pct >= 0.06:
-                protect_ratio = min(0.50 + vol_offset, 0.65)
-            elif unrealized_pct >= 0.045:
-                protect_ratio = min(0.35 + vol_offset, 0.50)
+                protect_ratio = min(0.60 + vol_offset, 0.70)
+            elif unrealized_pct >= 0.07:
+                protect_ratio = min(0.45 + vol_offset, 0.60)
+            elif unrealized_pct >= 0.055:
+                protect_ratio = min(0.30 + vol_offset, 0.45)
             else:
-                protect_ratio = min(0.25 + vol_offset, 0.35)
+                protect_ratio = min(0.20 + vol_offset, 0.30)
 
             if side == "long":
                 cur_high = pos_info.get("highest_price", price)

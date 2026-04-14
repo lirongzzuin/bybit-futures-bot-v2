@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
 """
-암호화폐 선물 자동매매 봇 — v17.2
+암호화폐 선물 자동매매 봇 — v17.3
 
-전략: Momentum Scalper v17.2 (1H 추세 + 5m 진입)
+전략: Momentum Scalper v17.3 (1H 추세 + 5m 진입)
 거래소: Bybit USDT 무기한 선물
 타임프레임: 5분봉 (1H 리샘플링으로 상위 추세 확인)
 
-v17.2 변경사항 (v17.1 배포 후 거래 0건 대응):
-  [진입 조건 정상화]
-  - adx_min: 28 → 25, ADX 2봉 연속 조건 제거
-  - RSI Long 25-35 → 28-42, Short 65-75 → 58-72
-  - BB 근접: 필수 → 선택 (스코어 +0.5)
-  - min_score: 2.7 → 2.3
-  - bb_atr_margin: 0.30 → 0.50
-  - cooldown: 40분 → 30분
-  [실시간성 강화]
-  - 분석 주기: 5분 → 90초 (fly.io shared-cpu 한계 내 최대치, 40 cycles/h)
-  - 포지션 모니터: 2초 → 1초
+v17.3 변경사항 (v17.2+ 35건 분석 — 실제 R:R 0.55:1 확인):
+  [R:R 회복 — 시간 기반 탈출 완화]
+  - 시간 기반 본전 SL 타이트닝: 120분/수익<0.5% → 160분/수익<0.3%
+    (120~160분 구간 TP 도달 여유 확보)
+  - Stage 2 트레일링 활성화: 3.5% → 4.5%
+  - Stage 2 보호 비율 재구성: 25/35/50/65 → 20/30/45/60
+  [v17.2 유지]
+  - 진입 조건: ADX 25, RSI Long 30-48/Short 52-70, min_score 2.3, BB 선택
+  - 분석 주기 90초, 포지션 모니터 1초, max_open_positions 3
   [v17.1 유지]
-  - Stage 1 본전 SL: 2.5% / Stage 2 트레일링: 3.5% / 보호 비율 25/35/50/65
-  - Stage 4 TP 확대 비활성화 / max_open_positions 3
+  - Stage 1 본전 SL 2.5% (승률 안전장치)
+  - Stage 4 TP 확대 비활성화 / min_notional 자동 보정
 
 실행: python main.py
 """
@@ -68,9 +66,9 @@ class TradingBot:
             self.mode_str = "메인넷"
         mode = self.mode_str
         logger.info("=" * 60)
-        logger.info(f"암호화폐 선물 자동매매 봇 v17.2")
+        logger.info(f"암호화폐 선물 자동매매 봇 v17.3")
         logger.info(f"  모드: {mode}")
-        logger.info(f"  전략: Momentum Scalper v17.2 (1H 추세 + 5m 진입)")
+        logger.info(f"  전략: Momentum Scalper v17.3 (1H 추세 + 5m 진입)")
         logger.info(f"  타임프레임: 5분봉 진입 (1H 리샘플링 추세 확인)")
         logger.info(f"  TP {OPTIMAL_PARAMS['tp_atr_mult']}x / SL {OPTIMAL_PARAMS['sl_atr_mult']}x / {OPTIMAL_PARAMS['leverage']}x lev")
         logger.info(f"  ADX >= {OPTIMAL_PARAMS['adx_min']} | RSI Long {OPTIMAL_PARAMS['rsi_pull_long_lo']}-{OPTIMAL_PARAMS['rsi_pull_long_hi']} | RSI Short {OPTIMAL_PARAMS['rsi_pull_short_lo']}-{OPTIMAL_PARAMS['rsi_pull_short_hi']}")
@@ -783,7 +781,7 @@ class TradingBot:
 
         pos_list = list(self.risk.state.open_positions.keys())
         notify("봇 시작", (
-            f"Momentum Scalper v17.2 | {self.mode_str}\n"
+            f"Momentum Scalper v17.3 | {self.mode_str}\n"
             f"타임프레임: 5분봉 (1H 크로스검증)\n"
             f"모니터링: 거래량 상위 {len(self.strategy_symbols)}개 심볼\n"
             f"분석 주기: 90초 / 포지션 모니터: 1초\n"

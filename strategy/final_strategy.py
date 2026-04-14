@@ -1,18 +1,14 @@
 """
-Momentum Scalper v17.2 — 진입 조건 정상화 (v17.1 배포 후 거래 0건 대응)
+Momentum Scalper v17.3 — R:R 회복 (v17.2+ 실거래 35건 분석 후 개선)
 
-v17.1 배포 후 2.5시간 동안 30심볼 × 30회 분석에도 시그널 0건 확인:
-  원인: ADX 28 + ADX 2봉 연속 + RSI 25-35/65-75 + BB 근접 필수 + min_score 2.7
-         모두 AND로 묶여서 현실에서 거의 만족 불가
+v17.2+ 35건 결과: 승률 65.7% / R:R 0.55:1 / 총 +0.30 USDT (break-even)
+원인: 120~160분 구간에서 13/35(37%)가 "시간 기반 본전 SL"로 작은 이익 탈출
 
-v17.2 변경:
-  1. adx_min: 28 → 25
-  2. ADX 2봉 연속 조건 제거 (현재 봉만 확인)
-  3. RSI 풀백 범위 확대: Long 25-35→28-42, Short 65-75→58-72
-  4. BB 밴드 근접: 필수 → 선택 (스코어 기여만 +0.5)
-  5. min_score: 2.7 → 2.3
-  6. sl_atr_mult 1.7 / TP 2.5 유지
-  7. Stage 1/2 본전 SL 저주 해소 로직은 v17.1 그대로 유지 (position_monitor.py)
+v17.3 변경 (position_monitor.py 위주):
+  - 시간 기반 본전 SL: 120분/수익<0.5% → 160분/수익<0.3%
+  - Stage 2 트레일링 활성화: 3.5% → 4.5%
+  - Stage 2 보호 비율 재구성: 25/35/50/65 → 20/30/45/60
+  - 진입 조건(v17.2)은 그대로 유지
 """
 import numpy as np
 import pandas as pd
@@ -20,7 +16,7 @@ from typing import Optional
 
 
 OPTIMAL_PARAMS = {
-    "strategy_type": "momentum_scalper_v17.2",
+    "strategy_type": "momentum_scalper_v17.3",
     # 1H indicators (HTF)
     "htf_ema_fast": 9,
     "htf_ema_mid": 21,
