@@ -1,14 +1,20 @@
 """
-Momentum Scalper v17.3 — R:R 회복 (v17.2+ 실거래 35건 분석 후 개선)
+Momentum Scalper v17.4 — 저가 알트 급락 차단 + 수익 잠금 SL
 
-v17.2+ 35건 결과: 승률 65.7% / R:R 0.55:1 / 총 +0.30 USDT (break-even)
-원인: 120~160분 구간에서 13/35(37%)가 "시간 기반 본전 SL"로 작은 이익 탈출
+v17.3 40건 결과: 승률 57.5% / R:R 0.46 / 총 -3.15 USDT (악화)
+원인:
+  1) 저가 알트 6건 급락 손실 합계 -3.88 USDT (전체 손실의 123%)
+     MYX/RAVE/APR/COAI 등 5~15분 내 -4~7%
+  2) Stage 2 트레일링 v17.3 완화가 avg_loss +37% 악화
+  3) 160분대 작은 이익(+0.06%) 여전 — Stage 1 본전 SL 체결로 추정
 
-v17.3 변경 (position_monitor.py 위주):
-  - 시간 기반 본전 SL: 120분/수익<0.5% → 160분/수익<0.3%
-  - Stage 2 트레일링 활성화: 3.5% → 4.5%
-  - Stage 2 보호 비율 재구성: 25/35/50/65 → 20/30/45/60
-  - 진입 조건(v17.2)은 그대로 유지
+v17.4 변경 (position_monitor.py + main.py):
+  - extreme 변동성 진입 금지 (main.py)
+  - 진입 5분 내 -2.5%+ → 즉시 시장가 청산 (position_monitor.py)
+  - Stage 1: 본전 SL → entry +0.5% 수익 잠금 SL
+  - Stage 2: v17.2 값으로 복원 (3.5% 활성화, 25/35/50/65 보호)
+  - 시간 기반 본전 SL 160분/0.3% 유지
+  - 진입 조건(v17.2) 그대로 유지
 """
 import numpy as np
 import pandas as pd
@@ -16,7 +22,7 @@ from typing import Optional
 
 
 OPTIMAL_PARAMS = {
-    "strategy_type": "momentum_scalper_v17.3",
+    "strategy_type": "momentum_scalper_v17.4",
     # 1H indicators (HTF)
     "htf_ema_fast": 9,
     "htf_ema_mid": 21,

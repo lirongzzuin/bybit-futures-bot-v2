@@ -232,6 +232,16 @@ class PositionMonitor:
                     entry_time = entry_time.replace(tzinfo=timezone.utc)
                 hold_minutes = (datetime.now(timezone.utc) - entry_time).total_seconds() / 60
 
+                # v17.4: 진입 직후 5분 내 손실 -2.5%+ → 즉시 시장가 청산
+                # (저가/고변동성 알트 급락 방지: MYX/RAVE/APR/COAI 같은 5~15분 -4~7% 케이스)
+                if hold_minutes <= 5 and unrealized_pct <= -0.025:
+                    logger.warning(
+                        f"[{symbol}] 진입 직후 급락 ({hold_minutes:.1f}분 {unrealized_pct:.1%}) → 급속 손절"
+                    )
+                    self.order_mgr.execute_exit(symbol, reason=f"quick_cut_{hold_minutes:.0f}m_{unrealized_pct:.1%}")
+                    self._symbol_cooldown[symbol] = datetime.now(timezone.utc) + timedelta(minutes=COOLDOWN_MINUTES)
+                    return
+
                 # v17.0 유지: 150분+ + 손실 1.5%+ → 시장가 손절
                 if hold_minutes >= 150 and unrealized_pct < -0.015:
                     logger.info(f"[{symbol}] 시간 초과 ({hold_minutes:.0f}분) + 손실 {unrealized_pct:.1%} → 타임아웃 청산")
@@ -265,15 +275,17 @@ class PositionMonitor:
             except Exception:
                 pass
 
-        # === Stage 1: 본전 보호 (수익 2.5%+) — v17.1 본전 SL 저주 해소 ===
-        # v17.0: 1.5% → v17.1: 2.5% (풀백에 조기 탈출 방지, 승리 규모 확대)
-        # 본전 SL = 진입가 + 왕복 수수료분 (순손실 제로 보장)
+        # === Stage 1: 수익 잠금 SL (수익 2.5%+) — v17.4 0.5% 이익 고정 ===
+        # v17.3까지는 본전(+수수료) SL이었으나 실거래 분석 결과
+        # "2.5% 도달 후 후퇴 → 본전 체결 → 0.06% 이익으로 기록" 패턴 다수 확인.
+        # v17.4: SL을 entry + 0.5% (또는 short: entry - 0.5%)로 이동.
+        # → 최소 0.5% 이익 확정, avg_win 직접 상승
         if unrealized_pct >= 0.025 and not pos_info.get("breakeven_set"):
-            fee_offset = entry * 0.00075  # 왕복 수수료 0.075%
+            profit_lock_pct = 0.005  # v17.4: 0.5% 수익 잠금
             if side == "long":
-                be_sl = self.client.round_price(symbol, entry + fee_offset)
+                be_sl = self.client.round_price(symbol, entry * (1 + profit_lock_pct))
             else:
-                be_sl = self.client.round_price(symbol, entry - fee_offset)
+                be_sl = self.client.round_price(symbol, entry * (1 - profit_lock_pct))
 
             if side == "long" and (sl < be_sl or sl == 0):
                 try:
@@ -281,7 +293,7 @@ class PositionMonitor:
                     pos_info["sl"] = be_sl
                     pos_info["breakeven_set"] = True
                     sl = be_sl
-                    logger.info(f"[{symbol}] 본전 SL 설정 — 수수료 반영 (수익 {unrealized_pct:.1%})")
+                    logger.info(f"[{symbol}] 수익 잠금 SL +0.5% (현재 수익 {unrealized_pct:.1%})")
                 except Exception:
                     pass
             elif side == "short" and (sl > be_sl or sl == 0):
@@ -290,14 +302,14 @@ class PositionMonitor:
                     pos_info["sl"] = be_sl
                     pos_info["breakeven_set"] = True
                     sl = be_sl
-                    logger.info(f"[{symbol}] 본전 SL 설정 — 수수료 반영 (수익 {unrealized_pct:.1%})")
+                    logger.info(f"[{symbol}] 수익 잠금 SL -0.5% (현재 수익 {unrealized_pct:.1%})")
                 except Exception:
                     pass
 
-        # === Stage 2: 변동성 적응 트레일링 SL (v17.3 — 더 느슨한 활성화) ===
-        # v17.3: 3.5%→4.5% 활성화 (추세 초기 여유 확대)
-        # 첫 밴드 보호 비율 25%→20%, 나머지 대역 소폭 하향
-        if unrealized_pct >= 0.045:
+        # === Stage 2: 변동성 적응 트레일링 SL (v17.4 — v17.2 롤백) ===
+        # v17.3의 4.5% 활성화 + 20/30/45/60 보호가 avg_loss +37% 악화 원인 확인
+        # → v17.2 값(3.5% 활성화, 25/35/50/65)으로 복원
+        if unrealized_pct >= 0.035:
             vol_regime = pos_info.get("vol_regime", "normal")
             if vol_regime in ("extreme", "high"):
                 vol_offset = -0.05
@@ -306,15 +318,15 @@ class PositionMonitor:
             else:
                 vol_offset = 0.0
 
-            # v17.3: 대역 재구성 — 20/30/45/60
+            # v17.4: 보호 비율 v17.2 복원 — 25/35/50/65
             if unrealized_pct >= 0.10:
-                protect_ratio = min(0.60 + vol_offset, 0.70)
-            elif unrealized_pct >= 0.07:
-                protect_ratio = min(0.45 + vol_offset, 0.60)
-            elif unrealized_pct >= 0.055:
-                protect_ratio = min(0.30 + vol_offset, 0.45)
+                protect_ratio = min(0.65 + vol_offset, 0.75)
+            elif unrealized_pct >= 0.06:
+                protect_ratio = min(0.50 + vol_offset, 0.65)
+            elif unrealized_pct >= 0.045:
+                protect_ratio = min(0.35 + vol_offset, 0.50)
             else:
-                protect_ratio = min(0.20 + vol_offset, 0.30)
+                protect_ratio = min(0.25 + vol_offset, 0.35)
 
             if side == "long":
                 cur_high = pos_info.get("highest_price", price)

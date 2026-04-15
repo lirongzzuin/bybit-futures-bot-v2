@@ -336,7 +336,7 @@ class TestOptimalParamsRegression:
 
     def test_optimal_params_unchanged(self):
         """Verify OPTIMAL_PARAMS values match expected (regression test v17.2)."""
-        assert OPTIMAL_PARAMS["strategy_type"] == "momentum_scalper_v17.3"
+        assert OPTIMAL_PARAMS["strategy_type"] == "momentum_scalper_v17.4"
         assert OPTIMAL_PARAMS["adx_min"] == 25           # v17.2: 28→25
         assert OPTIMAL_PARAMS["rsi_pull_long_lo"] == 30
         assert OPTIMAL_PARAMS["rsi_pull_long_hi"] == 48
