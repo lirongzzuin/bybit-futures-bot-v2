@@ -1,27 +1,26 @@
 #!/usr/bin/env python3
 """
-암호화폐 선물 자동매매 봇 — v17.4
+암호화폐 선물 자동매매 봇 — v17.5
 
-전략: Momentum Scalper v17.4 (1H 추세 + 5m 진입)
+전략: Momentum Scalper v17.5 (1H 추세 + 5m 진입)
 거래소: Bybit USDT 무기한 선물
 타임프레임: 5분봉 (1H 리샘플링으로 상위 추세 확인)
 
-v17.4 변경사항 (v17.3 40건 분석 — R:R 0.46, avg_loss -37% 악화 확인):
-  [저가 알트 급락 방지]
-  - extreme 변동성(ATR ratio > 2.0) 진입 금지
-  - 진입 5분 내 손실 -2.5%+ → 즉시 시장가 청산
-    (MYX/RAVE/APR/COAI 같은 5~15분 -4~7% 케이스 차단)
-  [수익 잠금 SL]
-  - Stage 1 본전(+수수료) SL → entry + 0.5% 수익 잠금 SL
-    (160분대 0.06% 이익 패턴을 최소 0.5% 이익으로 끌어올림)
-  [Stage 2 트레일링 롤백]
-  - v17.3의 4.5% 활성화 → 3.5% (v17.2 복원)
-  - 보호 비율 20/30/45/60 → 25/35/50/65 (v17.2 복원)
-  [v17.3 유지]
-  - 시간 기반 본전 SL 160분/0.3% 미만
-  - 150분+ 손실 1.5%+ 타임아웃
+v17.5 변경사항 (v17.5 이후 승률·R:R 동시 개선 목표):
+  [진입 품질 ↑]
+  - min_score 2.3 → 2.5 (저품질 진입 필터링)
+  - 볼륨 필터: 현재 볼륨/20봉MA < 0.8 → 진입 스킵
+  - high 변동성(ATR ratio 1.3~2.0) + score<2.8 → 진입 금지
+  [수익 확정 개선]
+  - Stage 1 수익 잠금 트리거 2.5% → 1.8%, 잠금 폭 0.5% → 0.3%
+    (후퇴 시 최소 0.3% 확정, 현 avg_win 0.06% 대비 5배)
+  - Stage 2 트레일링 활성화 3.5% → 2.8%, 첫 단계 보호 25% → 30%
+  - 1차 부분 익절 TP 60% → 50%, 청산 비율 30% → 40%
+  [v17.5 유지]
+  - extreme 변동성 진입 금지, 진입 5분 내 -2.5%+ 즉시 손절
+  - 시간 기반 본전 SL 160분/0.3% 미만, 150분+ 손실 1.5%+ 타임아웃
   [v17.2 유지]
-  - 진입 조건 ADX 25, RSI Long 30-48/Short 52-70, min_score 2.3, BB 선택
+  - ADX 25, RSI Long 30-48/Short 52-70, BB 선택
   - 분석 주기 90초, 포지션 모니터 1초, max_open_positions 3
 
 실행: python main.py
@@ -71,9 +70,9 @@ class TradingBot:
             self.mode_str = "메인넷"
         mode = self.mode_str
         logger.info("=" * 60)
-        logger.info(f"암호화폐 선물 자동매매 봇 v17.4")
+        logger.info(f"암호화폐 선물 자동매매 봇 v17.5")
         logger.info(f"  모드: {mode}")
-        logger.info(f"  전략: Momentum Scalper v17.4 (1H 추세 + 5m 진입)")
+        logger.info(f"  전략: Momentum Scalper v17.5 (1H 추세 + 5m 진입)")
         logger.info(f"  타임프레임: 5분봉 진입 (1H 리샘플링 추세 확인)")
         logger.info(f"  TP {OPTIMAL_PARAMS['tp_atr_mult']}x / SL {OPTIMAL_PARAMS['sl_atr_mult']}x / {OPTIMAL_PARAMS['leverage']}x lev")
         logger.info(f"  ADX >= {OPTIMAL_PARAMS['adx_min']} | RSI Long {OPTIMAL_PARAMS['rsi_pull_long_lo']}-{OPTIMAL_PARAMS['rsi_pull_long_hi']} | RSI Short {OPTIMAL_PARAMS['rsi_pull_short_lo']}-{OPTIMAL_PARAMS['rsi_pull_short_hi']}")
@@ -409,7 +408,7 @@ class TradingBot:
             if direction == 0:
                 return
 
-            # v17.4: extreme 변동성 레짐 진입 금지
+            # v17.5: extreme 변동성 레짐 진입 금지
             # 저가/고변동성 알트 5~15분 -4~7% 급락 방지
             if vol_regime == "extreme":
                 logger.info(f"[{symbol}] extreme 변동성 (ATR ratio > 2.0) → 진입 스킵")
@@ -807,7 +806,7 @@ class TradingBot:
 
         pos_list = list(self.risk.state.open_positions.keys())
         notify("봇 시작", (
-            f"Momentum Scalper v17.4 | {self.mode_str}\n"
+            f"Momentum Scalper v17.5 | {self.mode_str}\n"
             f"타임프레임: 5분봉 (1H 크로스검증)\n"
             f"모니터링: 거래량 상위 {len(self.strategy_symbols)}개 심볼\n"
             f"분석 주기: 90초 / 포지션 모니터: 1초\n"

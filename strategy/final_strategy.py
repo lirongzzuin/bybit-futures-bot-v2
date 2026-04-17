@@ -1,20 +1,23 @@
 """
-Momentum Scalper v17.4 — 저가 알트 급락 차단 + 수익 잠금 SL
+Momentum Scalper v17.5 — 진입 품질 강화 + 수익 확정 개선
 
 v17.3 40건 결과: 승률 57.5% / R:R 0.46 / 총 -3.15 USDT (악화)
-원인:
-  1) 저가 알트 6건 급락 손실 합계 -3.88 USDT (전체 손실의 123%)
-     MYX/RAVE/APR/COAI 등 5~15분 내 -4~7%
-  2) Stage 2 트레일링 v17.3 완화가 avg_loss +37% 악화
-  3) 160분대 작은 이익(+0.06%) 여전 — Stage 1 본전 SL 체결로 추정
+v17.4: extreme 변동성 차단 + 5분 내 -2.5% 급속 손절 + 수익 잠금 SL(+0.5%)
 
-v17.4 변경 (position_monitor.py + main.py):
-  - extreme 변동성 진입 금지 (main.py)
-  - 진입 5분 내 -2.5%+ → 즉시 시장가 청산 (position_monitor.py)
-  - Stage 1: 본전 SL → entry +0.5% 수익 잠금 SL
-  - Stage 2: v17.2 값으로 복원 (3.5% 활성화, 25/35/50/65 보호)
-  - 시간 기반 본전 SL 160분/0.3% 유지
-  - 진입 조건(v17.2) 그대로 유지
+v17.5 변경 (final_strategy.py + position_monitor.py + main.py):
+  [진입 품질 ↑]
+  - min_score 2.3 → 2.5 (저품질 20~30% 필터)
+  - 볼륨 필터: 현재 볼륨/20봉MA < 0.8 → 진입 스킵 (유동성 낮은 구간 회피)
+  - high 변동성(ATR ratio 1.3~2.0) + score<2.8 → 진입 금지
+    (extreme 외 영역에서도 평균 이상 품질을 요구)
+  [수익 확정 개선]
+  - Stage 1 수익 잠금 트리거 2.5% → 1.8%, 잠금 폭 +0.5% → +0.3%
+    (후퇴 시 최소 0.3% 확정, 현 avg_win 0.06% 대비 5배)
+  - Stage 2 트레일링 활성화 3.5% → 2.8%, 첫 단계 보호 25% → 30%
+  - 1차 부분 익절 TP 60% → 50%, 청산 비율 30% → 40%
+  [v17.4 유지]
+  - extreme 진입 금지, 5분내 -2.5% 급속 손절
+  - 시간 기반 본전 SL (160분/0.3% 미만)
 """
 import numpy as np
 import pandas as pd
@@ -22,7 +25,7 @@ from typing import Optional
 
 
 OPTIMAL_PARAMS = {
-    "strategy_type": "momentum_scalper_v17.4",
+    "strategy_type": "momentum_scalper_v17.5",
     # 1H indicators (HTF)
     "htf_ema_fast": 9,
     "htf_ema_mid": 21,
@@ -39,7 +42,7 @@ OPTIMAL_PARAMS = {
     "leverage": 5,
     "cooldown": 6,                   # v17.2: 8→6 (30분, 빈도 확보)
     "cooldown_after_sl": 6,
-    "min_score": 2.3,                # v17.2: 2.7→2.3
+    "min_score": 2.5,                # v17.5: 2.3→2.5 (저품질 필터)
     "bb_atr_margin": 0.50,           # v17.2: 0.30→0.50 (BB 근접 기준 완화)
     # 동적 레버리지
     "max_leverage": 8,
@@ -192,6 +195,8 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
     vol_sl = PROFIT_OPTIMIZATION["vol_sl_scale"]
     adx_bonus_cfg = PROFIT_OPTIMIZATION["adx_tp_bonus"]
     atr_avg_period = PROFIT_OPTIMIZATION["atr_avg_period"]
+    vol_min_ratio = PROFIT_OPTIMIZATION.get("volume_min_ratio", 0.8)       # v17.5
+    high_vol_min_score = PROFIT_OPTIMIZATION.get("high_vol_min_score", 2.8) # v17.5
 
     htf_freq = p.get("htf_resample", "1h")
 
@@ -348,6 +353,11 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
         if direction == 0 or score < min_score:
             continue
 
+        # v17.5: 볼륨 필터 — 현재 볼륨이 20봉 MA의 80% 미만이면 유동성 부족으로 스킵
+        if not np.isnan(vol_ma[i]) and vol_ma[i] > 0:
+            if vol[i] / vol_ma[i] < vol_min_ratio:
+                continue
+
         strength = min(score / 4.5, 1.0)
 
         # TP/SL (변동성 적응 + 최소 거리 보장)
@@ -357,6 +367,11 @@ def generate_signals(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Data
             elif atr_ratio > 1.3: tp_mult, sl_mult = vol_tp["high"], vol_sl["high"]
             elif atr_ratio < 0.7: tp_mult, sl_mult = vol_tp["low"], vol_sl["low"]
             else: tp_mult, sl_mult = vol_tp["normal"], vol_sl["normal"]
+
+            # v17.5: high 변동성(1.3~2.0) + 저품질 스코어 조합 차단
+            # extreme(>2.0)은 main.py에서 별도 차단 (v17.4)
+            if 1.3 < atr_ratio <= 2.0 and score < high_vol_min_score:
+                continue
         else:
             tp_mult, sl_mult = base_tp_mult, base_sl_mult
 

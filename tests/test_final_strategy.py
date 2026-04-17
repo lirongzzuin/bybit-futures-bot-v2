@@ -335,9 +335,9 @@ class TestOptimalParamsRegression:
     """Regression tests for OPTIMAL_PARAMS."""
 
     def test_optimal_params_unchanged(self):
-        """Verify OPTIMAL_PARAMS values match expected (regression test v17.2)."""
-        assert OPTIMAL_PARAMS["strategy_type"] == "momentum_scalper_v17.4"
-        assert OPTIMAL_PARAMS["adx_min"] == 25           # v17.2: 28→25
+        """Verify OPTIMAL_PARAMS values match expected (regression test v17.5)."""
+        assert OPTIMAL_PARAMS["strategy_type"] == "momentum_scalper_v17.5"
+        assert OPTIMAL_PARAMS["adx_min"] == 25
         assert OPTIMAL_PARAMS["rsi_pull_long_lo"] == 30
         assert OPTIMAL_PARAMS["rsi_pull_long_hi"] == 48
         assert OPTIMAL_PARAMS["rsi_pull_short_lo"] == 52
@@ -345,7 +345,7 @@ class TestOptimalParamsRegression:
         assert OPTIMAL_PARAMS["tp_atr_mult"] == 2.5
         assert OPTIMAL_PARAMS["sl_atr_mult"] == 1.7
         assert OPTIMAL_PARAMS["leverage"] == 5
-        assert OPTIMAL_PARAMS["min_score"] == 2.3        # v17.2: 2.7→2.3
+        assert OPTIMAL_PARAMS["min_score"] == 2.5        # v17.5: 2.3→2.5 (저품질 필터)
 
 
 class TestEngineConfigRegression:

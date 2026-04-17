@@ -275,17 +275,18 @@ class PositionMonitor:
             except Exception:
                 pass
 
-        # === Stage 1: 수익 잠금 SL (수익 2.5%+) — v17.4 0.5% 이익 고정 ===
-        # v17.3까지는 본전(+수수료) SL이었으나 실거래 분석 결과
-        # "2.5% 도달 후 후퇴 → 본전 체결 → 0.06% 이익으로 기록" 패턴 다수 확인.
-        # v17.4: SL을 entry + 0.5% (또는 short: entry - 0.5%)로 이동.
-        # → 최소 0.5% 이익 확정, avg_win 직접 상승
-        if unrealized_pct >= 0.025 and not pos_info.get("breakeven_set"):
-            profit_lock_pct = 0.005  # v17.4: 0.5% 수익 잠금
+        # === Stage 1: 수익 잠금 SL — v17.5: 1.8% 트리거 / +0.3% 잠금 ===
+        # v17.4: 2.5% 트리거 / +0.5% 잠금이었으나 TP 근접 후 후퇴 시
+        # 트리거 도달 전에 반락하는 케이스 존재 → 1.8%로 낮춰 더 빨리 확정.
+        # 잠금 폭은 0.5%→0.3%로 낮춰 트리거 완화에 따른 조기 탈출 위험 완충.
+        from config.indicator_params import PROFIT_OPTIMIZATION as _PO
+        s1_trigger = _PO.get("stage1_trigger_pct", 0.018)
+        s1_lock = _PO.get("stage1_lock_pct", 0.003)
+        if unrealized_pct >= s1_trigger and not pos_info.get("breakeven_set"):
             if side == "long":
-                be_sl = self.client.round_price(symbol, entry * (1 + profit_lock_pct))
+                be_sl = self.client.round_price(symbol, entry * (1 + s1_lock))
             else:
-                be_sl = self.client.round_price(symbol, entry * (1 - profit_lock_pct))
+                be_sl = self.client.round_price(symbol, entry * (1 - s1_lock))
 
             if side == "long" and (sl < be_sl or sl == 0):
                 try:
@@ -293,7 +294,7 @@ class PositionMonitor:
                     pos_info["sl"] = be_sl
                     pos_info["breakeven_set"] = True
                     sl = be_sl
-                    logger.info(f"[{symbol}] 수익 잠금 SL +0.5% (현재 수익 {unrealized_pct:.1%})")
+                    logger.info(f"[{symbol}] 수익 잠금 SL +{s1_lock*100:.1f}% (현재 수익 {unrealized_pct:.1%})")
                 except Exception:
                     pass
             elif side == "short" and (sl > be_sl or sl == 0):
@@ -302,14 +303,16 @@ class PositionMonitor:
                     pos_info["sl"] = be_sl
                     pos_info["breakeven_set"] = True
                     sl = be_sl
-                    logger.info(f"[{symbol}] 수익 잠금 SL -0.5% (현재 수익 {unrealized_pct:.1%})")
+                    logger.info(f"[{symbol}] 수익 잠금 SL -{s1_lock*100:.1f}% (현재 수익 {unrealized_pct:.1%})")
                 except Exception:
                     pass
 
-        # === Stage 2: 변동성 적응 트레일링 SL (v17.4 — v17.2 롤백) ===
-        # v17.3의 4.5% 활성화 + 20/30/45/60 보호가 avg_loss +37% 악화 원인 확인
-        # → v17.2 값(3.5% 활성화, 25/35/50/65)으로 복원
-        if unrealized_pct >= 0.035:
+        # === Stage 2: 변동성 적응 트레일링 SL — v17.5: 2.8% 활성화, 첫 단계 30% ===
+        # v17.4: 3.5% 활성 + 25/35/50/65 보호
+        # v17.5: 2.8% 활성 + 30/35/50/65 보호 (더 적극적 수익 보호)
+        s2_trigger = _PO.get("stage2_trigger_pct", 0.028)
+        s2_first = _PO.get("stage2_first_protect", 0.30)
+        if unrealized_pct >= s2_trigger:
             vol_regime = pos_info.get("vol_regime", "normal")
             if vol_regime in ("extreme", "high"):
                 vol_offset = -0.05
@@ -318,7 +321,6 @@ class PositionMonitor:
             else:
                 vol_offset = 0.0
 
-            # v17.4: 보호 비율 v17.2 복원 — 25/35/50/65
             if unrealized_pct >= 0.10:
                 protect_ratio = min(0.65 + vol_offset, 0.75)
             elif unrealized_pct >= 0.06:
@@ -326,7 +328,7 @@ class PositionMonitor:
             elif unrealized_pct >= 0.045:
                 protect_ratio = min(0.35 + vol_offset, 0.50)
             else:
-                protect_ratio = min(0.25 + vol_offset, 0.35)
+                protect_ratio = min(s2_first + vol_offset, 0.40)
 
             if side == "long":
                 cur_high = pos_info.get("highest_price", price)
@@ -355,11 +357,13 @@ class PositionMonitor:
 
         # === Stage 2.5 제거 (v7.5) — TP 축소로 조기 부분 익절 불필요 ===
 
-        # === Stage 3: 1차 부분 익절 (TP 60% 도달, 30% 청산) ===
-        if tp_progress >= 0.6 and not pos_info.get("partial_1_done"):
-            logger.info(f"[{symbol}] TP 진행 {tp_progress:.0%} → 1차 부분 익절 (30%)")
+        # === Stage 3: 1차 부분 익절 — v17.5: TP 50% 도달 시 40% 청산 ===
+        p1_progress = _PO.get("partial_1_progress", 0.50)
+        p1_ratio = _PO.get("partial_1_ratio", 0.40)
+        if tp_progress >= p1_progress and not pos_info.get("partial_1_done"):
+            logger.info(f"[{symbol}] TP 진행 {tp_progress:.0%} → 1차 부분 익절 ({p1_ratio*100:.0f}%)")
             self.order_mgr.execute_partial_close(
-                symbol, close_ratio=0.3,
+                symbol, close_ratio=p1_ratio,
                 reason=f"partial_1 (진행 {tp_progress:.0%}, 수익 {unrealized_pct:.1%})"
             )
             pos_info["partial_1_done"] = True

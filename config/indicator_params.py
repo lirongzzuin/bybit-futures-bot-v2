@@ -1,13 +1,14 @@
 """
-Indicator & Trading Parameters v17.2 — 진입 조건 정상화 + 실시간성 강화
-- v17.1 배포 후 2.5시간 거래 0건 → ADX/RSI/BB AND 조건 과도 제한 확인
-- v17.2 핵심 변경:
-  * adx_min 28→25, ADX 2봉 연속 조건 제거
-  * RSI Long 25-35→28-42, Short 65-75→58-72
-  * BB 근접: 필수 → 선택 (스코어 +0.5)
-  * min_score 2.7→2.3
-  * 분석 주기 5분→90초, 포지션 모니터 2초→1초 (fly.io shared-cpu 한계 내)
-  * v17.1의 Stage 1 본전 SL 저주 해소 로직은 유지
+Indicator & Trading Parameters v17.5 — 진입 품질 강화 + 수익 확정 개선
+- v17.3 40건 (57.5%/R:R 0.46, -3.15 USDT) → v17.4 저가알트·수익잠금 대응 후속
+- v17.5 핵심 변경:
+  * min_score 2.3 → 2.5 (저품질 진입 필터링)
+  * volume_min_ratio 0.8 신설 (평균 미만 유동성 진입 차단)
+  * high 변동성 + score<2.8 진입 금지 (extreme 외 영역까지 확장)
+  * Stage 1 수익 잠금 트리거 2.5%→1.8%, 잠금 폭 0.5%→0.3% (후퇴 대응 강화)
+  * Stage 2 트레일링 활성화 3.5%→2.8%, 첫 단계 보호 25%→30%
+  * 1차 부분 익절 TP진행 60%→50%, 청산 비율 30%→40%
+  * v17.2 진입 조건 골격·v17.4 저가알트 방어 그대로 유지
 """
 
 CANDLE_MASTER_PLAN = {
@@ -56,7 +57,7 @@ ORDER_TYPE_CONFIG = {
     "limit_timeout_seconds": 120,     # v13.0: 2분 (was 3분)
 }
 
-# === Profit Optimization v17.1 — SL 추가 확대, 노이즈 스탑아웃 완전 차단 ===
+# === Profit Optimization v17.5 — 진입 품질 강화 + 수익 확정 개선 ===
 PROFIT_OPTIMIZATION = {
     "vol_tp_scale": {
         "extreme": 3.0,
@@ -71,14 +72,26 @@ PROFIT_OPTIMIZATION = {
         "low": 1.4,          # v17.1: 1.2→1.4
     },
     "adx_tp_bonus": {
-        "threshold_1": 30,   # was 35 — 더 자주 보너스 적용
+        "threshold_1": 30,
         "bonus_1": 0.3,
-        "threshold_2": 40,   # was 45
+        "threshold_2": 40,
         "bonus_2": 0.5,
     },
-    "volume_spike_threshold": 1.3,  # was 1.5 — 약한 볼륨 스파이크도 포착
+    "volume_spike_threshold": 1.3,
     "volume_spike_score": 0.3,
     "atr_avg_period": 50,
+    # v17.5: 진입 품질 필터 ─────────────────────────────────
+    # 현재봉 볼륨이 20봉 MA × 0.8 미만이면 진입 스킵 (유동성 부족)
+    "volume_min_ratio": 0.8,
+    # high 변동성(ATR ratio 1.3~2.0) 구간에서 요구 스코어
+    "high_vol_min_score": 2.8,
+    # v17.5: 청산 단계 파라미터 ─────────────────────────────
+    "stage1_trigger_pct": 0.018,     # v17.4: 0.025
+    "stage1_lock_pct": 0.003,        # v17.4: 0.005
+    "stage2_trigger_pct": 0.028,     # v17.4: 0.035
+    "stage2_first_protect": 0.30,    # v17.4: 0.25
+    "partial_1_progress": 0.50,      # v17.4: 0.60
+    "partial_1_ratio": 0.40,         # v17.4: 0.30
 }
 
 SYMBOLS = {
