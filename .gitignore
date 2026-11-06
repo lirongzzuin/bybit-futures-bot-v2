@@ -7,3 +7,15 @@ reports/*.html
 !reports/*.md
 .venv/
 venv/
+logs/
+reports/
+*.log
+*.csv
+data/*.db
+.env.*
+!.env.example
+*.pem
+*.key
+.DS_Store
+.pytest_cache/
+.claude/settings.local.json

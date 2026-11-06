@@ -1,7 +1,8 @@
 """Health check server for fly.io"""
+import hmac
 import os
 import threading
-from flask import Flask, jsonify, request
+from flask import Flask, abort, jsonify, request
 
 from utils.logger import setup_logger
 
@@ -11,6 +12,19 @@ logger = setup_logger("health_server")
 def start_health_server(bot_instance):
     """fly.io 헬스체크용 간단 HTTP 서버 (별도 스레드)"""
     app = Flask(__name__)
+
+    # /health 외의 엔드포인트는 잔고·포지션·거래 분석을 노출하므로 토큰으로 보호한다.
+    # STATUS_TOKEN 이 비어 있으면 해당 엔드포인트는 모두 비활성화된다.
+    status_token = os.getenv("STATUS_TOKEN", "")
+
+    @app.before_request
+    def _require_token():
+        if request.path == "/health":
+            return None
+        given = request.headers.get("X-Status-Token", "")
+        if not status_token or not hmac.compare_digest(given, status_token):
+            abort(403)
+        return None
 
     @app.route("/health")
     def health():

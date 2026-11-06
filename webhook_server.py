@@ -61,7 +61,7 @@ def webhook():
     if not data:
         return jsonify({"error": "invalid json"}), 400
 
-    if WEBHOOK_SECRET and data.get("secret") != WEBHOOK_SECRET:
+    if not WEBHOOK_SECRET or data.get("secret") != WEBHOOK_SECRET:
         logger.warning(f"웹훅 인증 실패 — IP: {request.remote_addr}")
         return jsonify({"error": "unauthorized"}), 401
 
